@@ -1,0 +1,52 @@
+# seconds for hour simulation
+10
+
+# simulation clock start
+# hours minutes
+12 00
+
+# amount of defined objects:
+# trains turntables normalTracks stationTracks
+2 8 7 6
+
+# turntables:
+# id time
+0 10
+1 5
+2 15
+3 20
+4 12
+5 14
+6 18
+7 23
+
+# normalTracks:
+# id len limit from to
+0 100 120 0 2
+1 45 80 1 4
+2 40 130 1 4
+3 30 80 3 4
+4 35 80 3 5
+5 20 90 3 6
+6 50 100 5 7
+
+# stationTracks:
+# id name time from to
+0 psp 5 0 1
+1 nad 10 2 3
+2 nad 10 2 3
+3 glw 15 4 5
+4 glw 20 4 5
+5 woj 5 6 7
+
+# trains:
+# id speed capacity name len(route)
+# route by ids
+
+# train one
+0 94 220 one 6
+2 3 5 4 1 0
+
+# train two
+1 157 90 two 8
+6 7 5 4 1 0 2 3
