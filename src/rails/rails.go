@@ -1,3 +1,7 @@
+/*
+ * Radoslaw Kowalski 221454
+ */
+
 // Package rails implements types and operations for railroad simulation.
 package rails
 
