@@ -1,5 +1,5 @@
 # seconds for hour simulation
-10
+30
 
 # simulation clock start
 # hours minutes
@@ -7,7 +7,7 @@
 
 # amount of defined objects:
 # trains turntables normalTracks stationTracks
-2 8 7 6
+1 8 7 6
 
 # turntables:
 # id time
@@ -44,8 +44,8 @@
 # route by ids
 
 # train one
-0 94 220 one 6
-2 3 5 4 1 0
+# 0 94 220 one 6
+# 2 3 5 4 1 0
 
 # train two
 1 157 90 two 8
