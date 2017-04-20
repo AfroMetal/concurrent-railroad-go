@@ -17,62 +17,67 @@ import (
 	"rails"
 )
 
-// Ride simulates Train t actions on railroad defined by it's route and connections
-func Ride(t *rails.Train, connections *[]map[int][]rails.Track, group *sync.WaitGroup) {
+// Simulate simulates Train t actions on railroad defined by it's route and connections
+func Simulate(t *rails.Train, connections *[]map[int][]rails.Track, group *sync.WaitGroup) {
 	defer group.Done()
 
 	for {
+		// get nearest Turntables
 		fst, snd := t.Connection()
-	Loop1:
+	Loop1: // search for available Track connecting `fst` and `snd`
 		for {
 			for _, r := range (*connections)[fst.ID()][snd.ID()] {
 				switch r.GetLock() {
 				case true:
 					switch r.(type) {
+					// if train arrived at station, save it to timetable
 					case *rails.StationTrack:
-						statisticsChannel <- fmt.Sprintf("%v\t%s >-\t%v\n",
-							t, simulationNow(), r)
+						statisticsChannel <- fmt.Sprintf("%v %s >-\t%v\n",
+							t, clockTime(), r)
 					}
+					// calculate real seconds to simulate action time
 					time := float64(secondsPerHour) * t.MoveTo(r)
-					log.Printf("%s\t%v travels along %v",
-						simulationNow(), t, r)
-					t.SleepSeconds(time)
+					log.Printf("%s %v travels along %v",
+						clockTime(), t, r)
+					t.Delay(time)
 					break Loop1
 				case false:
 					continue
 				}
 			}
-			time := float64(secondsPerHour) * 0.25
-			log.Printf("%s\t%v have nowhere to go, it will wait for %.2fs",
-				simulationNow(), t, time)
-			t.SleepSeconds(time)
+			// time := float64(secondsPerHour) * 0.25
+			// log.Printf("%s %v have nowhere to go, it will wait for %.2fs",
+			// 	clockTime(), t, time)
+			// t.SleepSeconds(time)
 		}
-	Loop2:
+	Loop2: // loop until next target Turntable is available
 		for {
 			switch snd.GetLock() {
 			case true:
 				switch t.At().(type) {
+				// if train left station save it to timetable
 				case *rails.StationTrack:
-					statisticsChannel <- fmt.Sprintf("%v\t%s ->\t%v\n",
-						t, simulationNow(), t.At())
+					statisticsChannel <- fmt.Sprintf("%v %s ->\t%v\n",
+						t, clockTime(), t.At())
 				}
+				// calculate real seconds to simulate action time
 				time := float64(secondsPerHour) * t.MoveTo(snd)
-				log.Printf("%s\t%v rotates at %v",
-					simulationNow(), t, snd)
-				t.SleepSeconds(time)
+				log.Printf("%s %v rotates at %v",
+					clockTime(), t, snd)
+				t.Delay(time)
 				break Loop2
 			case false:
-				time := float64(secondsPerHour) * 0.25
-				log.Printf("%s\t%v have nowhere to go, it will wait for %.2fs",
-					simulationNow(), t, time)
-				t.SleepSeconds(time)
+				// time := float64(secondsPerHour) * 0.25
+				// log.Printf("%s %v have nowhere to go, it will wait for %.2fs",
+				// 	clockTime(), t, time)
+				// t.SleepSeconds(time)
 				continue
 			}
 		}
 	}
 }
 
-func simulationNow() string {
+func clockTime() string {
 	d := time.Since(start)
 
 	sH, f := math.Modf(d.Seconds() / float64(secondsPerHour))
@@ -97,6 +102,7 @@ func check(e error) {
 	}
 }
 
+// readFields scans lines until uncommented unempty line, then tokenizes it and returns
 func readFields(scan *bufio.Scanner, expected int) ([]string, error) {
 	scan.Scan()
 	text := scan.Text()
@@ -111,12 +117,10 @@ func readFields(scan *bufio.Scanner, expected int) ([]string, error) {
 	return fields, nil
 }
 
-var secondsPerHour int
-var clock struct {
-	h, m int
-}
-var start time.Time
-var statisticsWriter *bufio.Writer
+var secondsPerHour int             // how many seconds one hour of simulation lasts
+var clock struct{ h, m int }       // simulation clock start hours and minutes
+var start time.Time                // simulation start time for calculating simulation clock
+var statisticsWriter *bufio.Writer // statistics fiel writer
 var statisticsChannel = make(chan string, 256)
 
 var verbose = flag.Bool("verbose", false, "print state changes in real time")
@@ -125,7 +129,6 @@ var outFilename = flag.String("out", "output", "output file for statistics savin
 
 func main() {
 	flag.Parse()
-	start = time.Now()
 
 	out, err := os.Create(*outFilename)
 	check(err)
@@ -178,11 +181,6 @@ func main() {
 		"Simulation starts at %02d:%02d\n",
 		t, nt, st, tt, sph, clock.h, clock.m)
 
-	turntables := make([]*rails.Turntable, tt)
-	normalTracks := make([]*rails.NormalTrack, nt)
-	stationTracks := make([]*rails.StationTrack, st)
-	trains := make([]*rails.Train, t)
-
 	connections := make([]map[int][]rails.Track, tt)
 	for i := range connections {
 		connections[i] = make(map[int][]rails.Track)
@@ -191,6 +189,7 @@ func main() {
 		}
 	}
 
+	turntables := make([]*rails.Turntable, tt)
 	for i := range turntables {
 		fields, err := readFields(scan, 2)
 		check(err)
@@ -203,6 +202,7 @@ func main() {
 		turntables[i] = rails.NewTurntable(id, time)
 	}
 
+	normalTracks := make([]*rails.NormalTrack, nt)
 	for i := range normalTracks {
 		fields, err := readFields(scan, 5)
 		check(err)
@@ -224,6 +224,7 @@ func main() {
 		connections[snd][fst] = append(connections[snd][fst], normalTracks[i])
 	}
 
+	stationTracks := make([]*rails.StationTrack, st)
 	for i := range stationTracks {
 		fields, err := readFields(scan, 5)
 		check(err)
@@ -244,9 +245,7 @@ func main() {
 		connections[snd][fst] = append(connections[snd][fst], stationTracks[i])
 	}
 
-	waitGroup := new(sync.WaitGroup)
-	waitGroup.Add(len(trains))
-
+	trains := make([]*rails.Train, t)
 	for i := range trains {
 		fields, err := readFields(scan, 5)
 		check(err)
@@ -273,7 +272,13 @@ func main() {
 		}
 
 		trains[i] = rails.NewTrain(id, speed, capacity, name, route)
-		go Ride(trains[i], &connections, waitGroup)
+	}
+
+	waitGroup := new(sync.WaitGroup)
+	waitGroup.Add(len(trains))
+	start = time.Now()
+	for i := range trains {
+		go Simulate(trains[i], &connections, waitGroup)
 	}
 
 	if !*verbose {
@@ -303,7 +308,7 @@ func main() {
 				r := []rune(input)[0]
 				switch unicode.ToUpper(r) {
 				case 'C': // clock
-					fmt.Println(simulationNow())
+					fmt.Println(clockTime())
 				case 'P': // positions
 					for _, t := range trains {
 						fmt.Printf("%v: %v\n", t, t.At())

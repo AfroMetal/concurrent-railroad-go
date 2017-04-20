@@ -9,17 +9,18 @@ import (
 	"time"
 )
 
-// The Train stores all parameters for train instance needed for its simulation.
-//
+// Train stores all parameters for train instance needed for its simulation.
 // Only exported field is Name, all operations concerning Train type are done
 // by appropriate functions.
 // A Train must be created using NewTrain.
 type Train struct {
-	id, speed, capacity int
-	Name                string
-	route               Route
-	index               int
-	at                  Track
+	id       int    // Train's identificator
+	speed    int    // maximum speed in km/h
+	capacity int    // how many people can board the train
+	Name     string // Train's name for pretty printing
+	route    Route  // cycle on railroad represented by Turntables
+	index    int    // current position on route (last visited Turntable)
+	at       Track  // current position, Track the train occupies
 }
 
 // NewTrain creates pointer to new Train type instance.
@@ -53,8 +54,8 @@ func (t *Train) MoveTo(to Track) (time float64) {
 	return t.at.actionTime(t)
 }
 
-// SleepSeconds pauses Train tt for at least st seconds.
-func (t *Train) SleepSeconds(s float64) { time.Sleep(time.Duration(s) * time.Second) }
+// Delay pauses Train tt for at least st seconds.
+func (t *Train) Delay(s float64) { time.Sleep(time.Duration(s) * time.Second) }
 
 // String returns human-friendly label for Train t
 func (t *Train) String() string { return fmt.Sprintf("Train%d %s", t.id, t.Name) }
@@ -65,9 +66,6 @@ func (t *Train) GoString() string {
 		"rails.Train:%s:%d{speed:%d, cap:%d, route:%s, at:%s}",
 		t.Name, t.id, t.speed, t.capacity, t.route, t.at)
 }
-
-// A Route is a slice of Turntable pointers that represents cycle in railroad.
-type Route []*Turntable
 
 func (r Route) String() string {
 	ids := make([]string, len(r))
@@ -86,10 +84,10 @@ func (r Route) GoString() string {
 	return "rails.Route{" + strings.Join(ids, ", ") + "}"
 }
 
-// A Track is an interface for NormalTrack, StationTrack, Turntable that enables
+// Track is an interface for NormalTrack, StationTrack, Turntable that enables
 // basic operations on them without knowing precise type
 type Track interface {
-	actionTime(train *Train) float64
+	actionTime(train *Train) float64 // returns time needed before track can be left
 	ID() int
 	GetLock() bool
 	Lock()
@@ -98,28 +96,34 @@ type Track interface {
 	GoString() string
 }
 
-// The NormalTrack represents Track interface implementation that is used to pass distance
-// between two Turntables.
+// NormalTrack represents Track interface implementation that is used to pass distance between two Turntables.
 // It is an edge in railroad representation.
 type NormalTrack struct {
-	id, len, limit int
-	lock           chan bool
+	id    int // identificator
+	len   int // track length in km
+	limit int // speed limit on trac in km/h
+	lock  chan bool
 }
 
-// The StationTrack represents Track interface implementation to stationed Trains.
+// StationTrack represents Track interface implementation to stationed Trains.
 // It is an edge in railroad representation.
 type StationTrack struct {
-	id, time int
-	Name     string
-	lock     chan bool
+	id   int // identificator
+	time int // minimum time on station in minutes
+	Name string
+	lock chan bool
 }
 
-// The Turntable represents Track interface implementation to rotate Train and move from one track to another.
+// Turntable represents Track interface implementation to rotate Train and move from one track to another.
 // Turntable is a node connecting edges in railroad representation.
 type Turntable struct {
-	id, time int
-	lock     chan bool
+	id   int // identificator
+	time int // minimum time needed to rotate the train
+	lock chan bool
 }
+
+// Route is a slice of Turntable pointers that represents cycle in railroad.
+type Route []*Turntable
 
 // NewNormalTrack creates pointer to new NormalTrack type instance.
 // Created NormalTrack is unlocked.
@@ -148,15 +152,15 @@ func NewTurntable(id, time int) (tt *Turntable) {
 	return
 }
 
-// actionTime returns time in simulation minutes that traveling along NormalTrack will take.
+// actionTime returns time in simulation hours that traveling along NormalTrack will take.
 func (nt *NormalTrack) actionTime(train *Train) (time float64) {
 	return float64(nt.len) / math.Min(float64(nt.limit), float64(train.speed))
 }
 
-// actionTime returns time in simulation minutes that stationing on StationTrack will take.
+// actionTime returns time in simulation hours that stationing on StationTrack will take.
 func (st *StationTrack) actionTime(train *Train) (time float64) { return float64(st.time) / 60.0 }
 
-// actionTime returns time in simulation minutes that rotating on Turntable will take.
+// actionTime returns time in simulation hours that rotating on Turntable will take.
 func (tt *Turntable) actionTime(train *Train) (time float64) { return float64(tt.time) / 60.0 }
 
 // ID returns unexported field id
