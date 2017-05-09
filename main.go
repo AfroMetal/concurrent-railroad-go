@@ -127,6 +127,7 @@ var statisticsWriter *bufio.Writer // statistics fiel writer
 var statisticsChannel = make(chan string, 256)
 
 var verbose = flag.Bool("verbose", false, "print state changes in real time")
+var generateDotFile = flag.Bool("dot", false, "generate Graphviz .dot file of railroad")
 var inFilename = flag.String("in", "input", "input file containing railroad description")
 var outFilename = flag.String("out", "output", "output file for statistics saving, will be overwritten")
 
@@ -247,7 +248,41 @@ func main() {
 		connections[fst][snd] = append(connections[fst][snd], stationTracks[i])
 		connections[snd][fst] = append(connections[snd][fst], stationTracks[i])
 	}
-
+	
+	if *generateDotFile {
+		out, err := os.Create(*outFilename + ".gv")
+		check(err)
+		defer out.Close()
+		dotWriter := bufio.NewWriter(out)
+		
+		dotWriter.WriteString("graph " + *inFilename + " {" +
+			"graph [pad=\"0.25\", nodesep=\"0.5\", ranksep=\"1.0\"];\n")
+		
+		for i := range connections {
+			for j := range connections[i] {
+				for _, t := range connections[i][j] {
+					dotWriter.WriteString("\t" + strconv.Itoa(i) + " -- " + strconv.Itoa(j))
+					switch t.(type) {
+					case *rails.StationTrack:
+						s, _ := t.(*rails.StationTrack)
+						dotWriter.WriteString(" [label=" + s.Name + ", color=blue]\n")
+						dotWriter.WriteString("\t{rank=same; " + strconv.Itoa(i) + "; " + strconv.Itoa(j) + "}\n")
+					default:
+						dotWriter.WriteString("\n")
+					}
+				}
+				dotWriter.Flush()
+			}
+		}
+		
+		dotWriter.WriteString("}\n")
+		dotWriter.Flush()
+		
+		fmt.Printf("Graphviz .gv file generated under: %s\n", out.Name())
+		
+		os.Exit(0)
+	}
+	
 	trains := make([]*rails.Train, t)
 	for i := range trains {
 		fields, err := readFields(scan, 5)
