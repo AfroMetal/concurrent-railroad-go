@@ -24,42 +24,48 @@ import (
 func Simulate(t *rails.Train, connections *[]map[int][]rails.Track, group *sync.WaitGroup) {
 	defer group.Done()
 
+	log.Printf("%s %v starts work", clockTime(), t)
+
 	track := t.At().(*rails.Turntable)
 	track.Rider <- t
 	<-t.Done
 	<-track.Done
 
 	for {
-		// get nearest Turntables
-		fst, snd := t.Connection()
-	Loop1: // search for available Track connecting `fst` and `snd`
-		for {
-			for _, r := range (*connections)[fst.ID()][snd.ID()] {
-				switch r.(type) {
-				case *rails.StationTrack:
-					r := r.(*rails.StationTrack)
-					select {
-					case r.Rider <- t:
-						<-r.Done
-						break Loop1
-					default:
-						continue
-					}
-				case *rails.NormalTrack:
-					r := r.(*rails.NormalTrack)
-					select {
-					case r.Rider <- t:
-						<-r.Done
-						break Loop1
-					default:
-						continue
+		select {
+		case <-t.Broke:
+		default:
+			// get nearest Turntables
+			fst, snd := t.Connection()
+		Loop1: // search for available Track connecting `fst` and `snd`
+			for {
+				for _, r := range (*connections)[fst.ID()][snd.ID()] {
+					switch r.(type) {
+					case *rails.StationTrack:
+						r := r.(*rails.StationTrack)
+						select {
+						case r.Rider <- t:
+							<-r.Done
+							break Loop1
+						default:
+							continue
+						}
+					case *rails.NormalTrack:
+						r := r.(*rails.NormalTrack)
+						select {
+						case r.Rider <- t:
+							<-r.Done
+							break Loop1
+						default:
+							continue
+						}
 					}
 				}
 			}
+			snd.Rider <- t
+			t.NextPosition()
+			<-snd.Done
 		}
-		snd.Rider <- t
-		t.NextPosition()
-		<-snd.Done
 	}
 }
 
@@ -178,20 +184,24 @@ func main() {
 
 	turntables := make([]*rails.Turntable, tt)
 	for i := range turntables {
-		fields, err := readFields(scan, 2)
+		fields, err := readFields(scan, 3)
 		check(err)
 
 		id, err := strconv.Atoi(fields[0])
 		check(err)
 		rTime, err := strconv.Atoi(fields[1])
 		check(err)
+		repTime, err := strconv.Atoi(fields[2])
+		check(err)
 
-		turntables[i] = rails.NewTurntable(id, rTime)
+		turntables[i] = rails.NewTurntable(id, rTime, repTime)
 
 		go func(self *rails.Turntable) {
 			for {
 				select {
-				case t := <-self.Rider:
+				case <-self.Broke:
+				default:
+					t := <-self.Rider
 					t.Done <- true
 
 					switch t.At().(type) {
@@ -216,7 +226,7 @@ func main() {
 
 	normalTracks := make([]*rails.NormalTrack, nt)
 	for i := range normalTracks {
-		fields, err := readFields(scan, 5)
+		fields, err := readFields(scan, 6)
 		check(err)
 
 		id, err := strconv.Atoi(fields[0])
@@ -225,12 +235,14 @@ func main() {
 		check(err)
 		speed, err := strconv.Atoi(fields[2])
 		check(err)
-		fst, err := strconv.Atoi(fields[3])
+		repTime, err := strconv.Atoi(fields[3])
 		check(err)
-		snd, err := strconv.Atoi(fields[4])
+		fst, err := strconv.Atoi(fields[4])
+		check(err)
+		snd, err := strconv.Atoi(fields[5])
 		check(err)
 
-		normalTracks[i] = rails.NewNormalTrack(id, len, speed)
+		normalTracks[i] = rails.NewNormalTrack(id, len, speed, repTime)
 
 		connections[fst][snd] = append(connections[fst][snd], normalTracks[i])
 		connections[snd][fst] = append(connections[snd][fst], normalTracks[i])
@@ -238,7 +250,9 @@ func main() {
 		go func(self *rails.NormalTrack) {
 			for {
 				select {
-				case t := <-self.Rider:
+				case <-self.Broke:
+				default:
+					t := <-self.Rider
 					t.Done <- true
 
 					t.SetAt(self)
@@ -255,7 +269,7 @@ func main() {
 
 	stationTracks := make([]*rails.StationTrack, st)
 	for i := range stationTracks {
-		fields, err := readFields(scan, 5)
+		fields, err := readFields(scan, 6)
 		check(err)
 
 		id, err := strconv.Atoi(fields[0])
@@ -263,12 +277,14 @@ func main() {
 		name := fields[1]
 		sTime, err := strconv.Atoi(fields[2])
 		check(err)
-		fst, err := strconv.Atoi(fields[3])
+		repTime, err := strconv.Atoi(fields[3])
 		check(err)
-		snd, err := strconv.Atoi(fields[4])
+		fst, err := strconv.Atoi(fields[4])
+		check(err)
+		snd, err := strconv.Atoi(fields[5])
 		check(err)
 
-		stationTracks[i] = rails.NewStationTrack(id, name, sTime)
+		stationTracks[i] = rails.NewStationTrack(id, name, sTime, repTime)
 
 		connections[fst][snd] = append(connections[fst][snd], stationTracks[i])
 		connections[snd][fst] = append(connections[snd][fst], stationTracks[i])
@@ -276,7 +292,9 @@ func main() {
 		go func(self *rails.StationTrack) {
 			for {
 				select {
-				case t := <-self.Rider:
+				case <-self.Broke:
+				default:
+					t := <-self.Rider
 					t.Done <- true
 
 					statisticsChannel <- fmt.Sprintf("%v %s >-\t%v\n",
@@ -330,7 +348,7 @@ func main() {
 
 	trains := make([]*rails.Train, t)
 	for i := range trains {
-		fields, err := readFields(scan, 5)
+		fields, err := readFields(scan, 6)
 		check(err)
 
 		id, err := strconv.Atoi(fields[0])
@@ -339,8 +357,10 @@ func main() {
 		check(err)
 		capacity, err := strconv.Atoi(fields[2])
 		check(err)
-		name := fields[3]
-		len, err := strconv.Atoi(fields[4])
+		repTime, err := strconv.Atoi(fields[3])
+		check(err)
+		name := fields[4]
+		len, err := strconv.Atoi(fields[5])
 		check(err)
 
 		fields, err = readFields(scan, len)
@@ -354,7 +374,7 @@ func main() {
 			route = append(route, turntables[index])
 		}
 
-		trains[i] = rails.NewTrain(id, speed, capacity, name, route)
+		trains[i] = rails.NewTrain(id, speed, capacity, repTime, name, route)
 	}
 
 	waitGroup := new(sync.WaitGroup)
