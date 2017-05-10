@@ -17,12 +17,17 @@ import (
 	"time"
 	"unicode"
 
-	"rails"
+	"./src/rails"
 )
 
 // Simulate simulates Train t actions on railroad defined by it's route and connections
 func Simulate(t *rails.Train, connections *[]map[int][]rails.Track, group *sync.WaitGroup) {
 	defer group.Done()
+
+	track := t.At().(*rails.Turntable)
+	track.Rider <- t
+	<-t.Done
+	<-track.Done
 
 	for {
 		// get nearest Turntables
@@ -30,53 +35,31 @@ func Simulate(t *rails.Train, connections *[]map[int][]rails.Track, group *sync.
 	Loop1: // search for available Track connecting `fst` and `snd`
 		for {
 			for _, r := range (*connections)[fst.ID()][snd.ID()] {
-				switch r.GetLock() {
-				case true:
-					switch r.(type) {
-					// if train arrived at station, save it to timetable
-					case *rails.StationTrack:
-						statisticsChannel <- fmt.Sprintf("%v %s >-\t%v\n",
-							t, clockTime(), r)
-					}
-					// calculate real seconds to simulate action time
-					time := float64(secondsPerHour) * t.MoveTo(r)
-					log.Printf("%s %v travels along %v",
-						clockTime(), t, r)
-					t.Delay(time)
-					break Loop1
-				case false:
-					continue
-				}
-			}
-			// time := float64(secondsPerHour) * 0.25
-			// log.Printf("%s %v have nowhere to go, it will wait for %.2fs",
-			// 	clockTime(), t, time)
-			// t.SleepSeconds(time)
-		}
-	Loop2: // loop until next target Turntable is available
-		for {
-			switch snd.GetLock() {
-			case true:
-				switch t.At().(type) {
-				// if train left station save it to timetable
+				switch r.(type) {
 				case *rails.StationTrack:
-					statisticsChannel <- fmt.Sprintf("%v %s ->\t%v\n",
-						t, clockTime(), t.At())
+					r := r.(*rails.StationTrack)
+					select {
+					case r.Rider <- t:
+						<-r.Done
+						break Loop1
+					default:
+						continue
+					}
+				case *rails.NormalTrack:
+					r := r.(*rails.NormalTrack)
+					select {
+					case r.Rider <- t:
+						<-r.Done
+						break Loop1
+					default:
+						continue
+					}
 				}
-				// calculate real seconds to simulate action time
-				time := float64(secondsPerHour) * t.MoveTo(snd)
-				log.Printf("%s %v rotates at %v",
-					clockTime(), t, snd)
-				t.Delay(time)
-				break Loop2
-			case false:
-				// time := float64(secondsPerHour) * 0.25
-				// log.Printf("%s %v have nowhere to go, it will wait for %.2fs",
-				// 	clockTime(), t, time)
-				// t.SleepSeconds(time)
-				continue
 			}
 		}
+		snd.Rider <- t
+		t.NextPosition()
+		<-snd.Done
 	}
 }
 
@@ -200,10 +183,35 @@ func main() {
 
 		id, err := strconv.Atoi(fields[0])
 		check(err)
-		time, err := strconv.Atoi(fields[1])
+		rTime, err := strconv.Atoi(fields[1])
 		check(err)
 
-		turntables[i] = rails.NewTurntable(id, time)
+		turntables[i] = rails.NewTurntable(id, rTime)
+
+		go func(self *rails.Turntable) {
+			for {
+				select {
+				case t := <-self.Rider:
+					t.Done <- true
+
+					switch t.At().(type) {
+					// if train left station save it to timetable
+					case *rails.StationTrack:
+						statisticsChannel <- fmt.Sprintf("%v %s ->\t%v\n",
+							t, clockTime(), t.At())
+					}
+					// calculate real seconds to simulate action time
+					t.SetAt(self)
+					log.Printf("%s %v rotates at %v",
+						clockTime(), t, self)
+					//t.Delay(time)
+					self.Sleep(t, secondsPerHour)
+
+					self.Done <- true
+					<-t.Done
+				}
+			}
+		}(turntables[i])
 	}
 
 	normalTracks := make([]*rails.NormalTrack, nt)
@@ -226,6 +234,23 @@ func main() {
 
 		connections[fst][snd] = append(connections[fst][snd], normalTracks[i])
 		connections[snd][fst] = append(connections[snd][fst], normalTracks[i])
+
+		go func(self *rails.NormalTrack) {
+			for {
+				select {
+				case t := <-self.Rider:
+					t.Done <- true
+
+					t.SetAt(self)
+					log.Printf("%s %v travels along %v",
+						clockTime(), t, self)
+					self.Sleep(t, secondsPerHour)
+
+					self.Done <- true
+					<-t.Done
+				}
+			}
+		}(normalTracks[i])
 	}
 
 	stationTracks := make([]*rails.StationTrack, st)
@@ -236,28 +261,48 @@ func main() {
 		id, err := strconv.Atoi(fields[0])
 		check(err)
 		name := fields[1]
-		time, err := strconv.Atoi(fields[2])
+		sTime, err := strconv.Atoi(fields[2])
 		check(err)
 		fst, err := strconv.Atoi(fields[3])
 		check(err)
 		snd, err := strconv.Atoi(fields[4])
 		check(err)
 
-		stationTracks[i] = rails.NewStationTrack(id, name, time)
+		stationTracks[i] = rails.NewStationTrack(id, name, sTime)
 
 		connections[fst][snd] = append(connections[fst][snd], stationTracks[i])
 		connections[snd][fst] = append(connections[snd][fst], stationTracks[i])
+
+		go func(self *rails.StationTrack) {
+			for {
+				select {
+				case t := <-self.Rider:
+					t.Done <- true
+
+					statisticsChannel <- fmt.Sprintf("%v %s >-\t%v\n",
+						t, clockTime(), self)
+					// calculate real seconds to simulate action time
+					t.SetAt(self)
+					log.Printf("%s %v waits on %v",
+						clockTime(), t, self)
+					self.Sleep(t, secondsPerHour)
+
+					self.Done <- true
+					<-t.Done
+				}
+			}
+		}(stationTracks[i])
 	}
-	
+
 	if *generateDotFile {
 		out, err := os.Create(*outFilename + ".gv")
 		check(err)
 		defer out.Close()
 		dotWriter := bufio.NewWriter(out)
-		
+
 		dotWriter.WriteString("graph " + *inFilename + " {" +
 			"graph [pad=\"0.25\", nodesep=\"0.5\", ranksep=\"1.0\"];\n")
-		
+
 		for i := range connections {
 			for j := range connections[i] {
 				for _, t := range connections[i][j] {
@@ -274,15 +319,15 @@ func main() {
 				dotWriter.Flush()
 			}
 		}
-		
+
 		dotWriter.WriteString("}\n")
 		dotWriter.Flush()
-		
+
 		fmt.Printf("Graphviz .gv file generated under: %s\n", out.Name())
-		
+
 		os.Exit(0)
 	}
-	
+
 	trains := make([]*rails.Train, t)
 	for i := range trains {
 		fields, err := readFields(scan, 5)
@@ -314,10 +359,6 @@ func main() {
 
 	waitGroup := new(sync.WaitGroup)
 	waitGroup.Add(len(trains))
-	start = time.Now()
-	for i := range trains {
-		go Simulate(trains[i], &connections, waitGroup)
-	}
 
 	if !*verbose {
 		log.SetOutput(ioutil.Discard)
@@ -382,6 +423,11 @@ func main() {
 		}()
 	} else {
 		log.SetFlags(0)
+	}
+
+	start = time.Now()
+	for i := range trains {
+		go Simulate(trains[i], &connections, waitGroup)
 	}
 
 	waitGroup.Wait()
