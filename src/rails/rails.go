@@ -27,7 +27,8 @@ type Train struct {
 	index      int    // current position on route (last visited Turntable)
 	at         Track  // current position, Track the train occupies
 	Done       chan bool
-	Broke      chan bool
+	Repaired   chan bool
+	Broke      chan *Train
 }
 
 // NewTrain creates pointer to new Train type instance.
@@ -44,7 +45,8 @@ func NewTrain(id, speed, cap, repTime int, name string, route Route) (train *Tra
 		index:      0,
 		at:         route[0],
 		Done:       make(chan bool),
-		Broke:      make(chan bool, 1)}
+		Repaired:   make(chan bool),
+		Broke:      make(chan *Train, 1)}
 	return
 }
 
@@ -52,6 +54,8 @@ func NewTrain(id, speed, cap, repTime int, name string, route Route) (train *Tra
 func (t *Train) At() Track { return t.at }
 
 func (t *Train) ID() int { return t.id }
+
+func (t *Train) Speed() int { return t.speed }
 
 // Connection returns pair of pointers to Turntables in tt'st route from current at.
 func (t *Train) Connection() (from, to *Turntable) {
@@ -71,7 +75,7 @@ func (t *Train) NextPosition() {
 }
 
 // Delay pauses Train tt for at least st seconds.
-func (t *Train) Delay(s float64) { time.Sleep(time.Duration(s) * time.Second) }
+func (t *Train) Delay(s float64) { time.Sleep(time.Duration(s*1000.0) * time.Millisecond) }
 
 // String returns human-friendly label for Train t
 func (t *Train) String() string { return fmt.Sprintf("Train%d %s", t.id, strings.ToUpper(t.Name)) }
@@ -79,9 +83,12 @@ func (t *Train) String() string { return fmt.Sprintf("Train%d %s", t.id, strings
 // GoString returns more verbose human-friendly representation of Train t
 func (t *Train) GoString() string {
 	return fmt.Sprintf(
-		"rails.Train:%s:%d{speed:%d, cap:%d, route:%s, at:%s}",
-		t.Name, t.id, t.speed, t.capacity, t.route, t.at)
+		"rails.Train:%s:%d{speed:%d, cap:%d, RepairTime:%d, route:%s, at:%s}",
+		t.Name, t.id, t.speed, t.capacity, t.repairTime, t.route, t.at)
 }
+
+// Route is a slice of Turntable pointers that represents cycle in railroad.
+type Route []*Turntable
 
 func (r Route) String() string {
 	ids := make([]string, len(r))
@@ -100,11 +107,96 @@ func (r Route) GoString() string {
 	return "rails.Route{" + strings.Join(ids, ", ") + "}"
 }
 
+type Connections []map[int][]Track
+type Neighbors []Track
+type Path []Track
+
+type BrokenFella interface {
+	RepairTime() float64
+	Repair()
+	Neighbors(connections Connections) (ns Neighbors)
+}
+
+func (t *Train) RepairTime() float64 { return float64(t.repairTime) / 60.0 }
+
+func (tt *Turntable) RepairTime() float64 { return float64(tt.repairTime) / 60.0 }
+
+func (nt *NormalTrack) RepairTime() float64 { return float64(nt.repairTime) / 60.0 }
+
+func (st *StationTrack) RepairTime() float64 { return float64(st.repairTime) / 60.0 }
+
+func (t *Train) Repair() { t.Repaired <- true }
+
+func (tt *Turntable) Repair() { tt.Repaired <- true }
+
+func (nt *NormalTrack) Repair() { nt.Repaired <- true }
+
+func (st *StationTrack) Repair() { st.Repaired <- true }
+
+func (t *Train) Neighbors(connections Connections) (ns Neighbors) {
+	pos := t.at
+	return pos.(BrokenFella).Neighbors(connections)
+}
+
+func (tt *Turntable) Neighbors(connections Connections) (ns Neighbors) {
+	i := tt.id
+	for j := range connections[i] {
+		for _, track := range connections[i][j] {
+			ns = append(ns, track)
+		}
+	}
+	return
+}
+
+func (nt *NormalTrack) Neighbors(connections Connections) (ns Neighbors) {
+	ns = Neighbors{nt.first, nt.second}
+	return
+}
+
+func (st *StationTrack) Neighbors(connections Connections) (ns Neighbors) {
+	ns = Neighbors{st.first, st.second}
+	return
+}
+
+type RepairTeam struct {
+	id      int // Train's identificator
+	speed   int // maximum speed in km/h
+	station *StationTrack
+	Path    chan Path // path to damaged fella
+	Done    chan bool
+}
+
+func NewRepairTeam(id, speed int, station *StationTrack) (team *RepairTeam) {
+	team = &RepairTeam{
+		id:      id,
+		speed:   speed,
+		station: station,
+		Path:    make(chan Path),
+		Done:    make(chan bool)}
+	return
+}
+
+func (rt *RepairTeam) Station() *StationTrack { return rt.station }
+func (rt *RepairTeam) Speed() int             { return rt.speed }
+
+// String returns human-friendly label for Train t
+func (rt *RepairTeam) String() string { return fmt.Sprintf("RepairTeam%d", rt.id) }
+
+// GoString returns more verbose human-friendly representation of Train t
+func (rt *RepairTeam) GoString() string {
+	return fmt.Sprintf(
+		"rails.RepairTeam:%d{speed:%d, stationId:%d}",
+		rt.id, rt.speed, rt.station.id)
+}
+
 // Track is an interface for NormalTrack, StationTrack, Turntable that enables
 // basic operations on them without knowing precise type
 type Track interface {
-	Sleep(train *Train, sph int)
+	Sleep(speed int, sph int)
 	ID() int
+	Reserve() bool
+	Do()
+	Cancel()
 	String() string
 	GoString() string
 }
@@ -116,9 +208,15 @@ type NormalTrack struct {
 	len        int // track length in km
 	limit      int // speed limit on trac in km/h
 	repairTime int
+	first      *Turntable
+	second     *Turntable
 	Rider      chan *Train
 	Done       chan bool
-	Broke      chan bool
+	Reserved   chan bool
+	Available  chan bool
+	Cancelled  chan bool
+	Repaired   chan bool
+	Broke      chan *NormalTrack
 }
 
 // StationTrack represents Track interface implementation to stationed Trains.
@@ -128,9 +226,15 @@ type StationTrack struct {
 	stopTime   int // minimum stopTime on station in minutes
 	repairTime int
 	Name       string
+	first      *Turntable
+	second     *Turntable
 	Rider      chan *Train
 	Done       chan bool
-	Broke      chan bool
+	Reserved   chan bool
+	Available  chan bool
+	Cancelled  chan bool
+	Repaired   chan bool
+	Broke      chan *StationTrack
 }
 
 // Turntable represents Track interface implementation to rotate Train and move from one track to another.
@@ -141,39 +245,52 @@ type Turntable struct {
 	repairTime int
 	Rider      chan *Train
 	Done       chan bool
-	Broke      chan bool
+	Reserved   chan bool
+	Available  chan bool
+	Cancelled  chan bool
+	Repaired   chan bool
+	Broke      chan *Turntable
 }
-
-// Route is a slice of Turntable pointers that represents cycle in railroad.
-type Route []*Turntable
 
 // NewNormalTrack creates pointer to new NormalTrack type instance.
 // Created NormalTrack is unlocked.
 // NormalTrack should always be created using NewNormalTrack.
-func NewNormalTrack(id, len, limit, repTime int) (nt *NormalTrack) {
+func NewNormalTrack(id, len, limit, repTime int, fst, snd *Turntable) (nt *NormalTrack) {
 	nt = &NormalTrack{
 		id:         id,
 		len:        len,
 		limit:      limit,
 		repairTime: repTime,
+		first:      fst,
+		second:     snd,
 		Rider:      make(chan *Train),
 		Done:       make(chan bool),
-		Broke:      make(chan bool, 1)}
+		Reserved:   make(chan bool),
+		Available:  make(chan bool, 1),
+		Cancelled:  make(chan bool),
+		Repaired:   make(chan bool),
+		Broke:      make(chan *NormalTrack, 1)}
 	return
 }
 
 // NewStationTrack creates pointer to new StationTrack type instance.
 // Created StationTrack is unlocked.
 // StationTrack should always be created using NewStationTrack.
-func NewStationTrack(id int, name string, time, repTime int) (st *StationTrack) {
+func NewStationTrack(id int, name string, time, repTime int, fst, snd *Turntable) (st *StationTrack) {
 	st = &StationTrack{
 		id:         id,
 		stopTime:   time,
 		repairTime: repTime,
 		Name:       strings.ToUpper(name),
+		first:      fst,
+		second:     snd,
 		Rider:      make(chan *Train),
 		Done:       make(chan bool),
-		Broke:      make(chan bool, 1)}
+		Reserved:   make(chan bool),
+		Available:  make(chan bool, 1),
+		Cancelled:  make(chan bool),
+		Repaired:   make(chan bool),
+		Broke:      make(chan *StationTrack, 1)}
 	return
 }
 
@@ -187,29 +304,33 @@ func NewTurntable(id, time, repTime int) (tt *Turntable) {
 		repairTime: repTime,
 		Rider:      make(chan *Train),
 		Done:       make(chan bool),
-		Broke:      make(chan bool, 1)}
+		Reserved:   make(chan bool),
+		Available:  make(chan bool, 1),
+		Cancelled:  make(chan bool),
+		Repaired:   make(chan bool),
+		Broke:      make(chan *Turntable, 1)}
 	return
 }
 
 // ActionTime returns stopTime in simulation hours that traveling along NormalTrack will take.
-func (nt *NormalTrack) Sleep(train *Train, sph int) {
-	duration := float64(nt.len) / math.Min(float64(nt.limit), float64(train.speed))
-	sleepTime := float64(sph) * duration
-	time.Sleep(time.Duration(sleepTime) * time.Second)
+func (nt *NormalTrack) Sleep(speed int, sph int) {
+	duration := float64(nt.len) / math.Min(float64(nt.limit), float64(speed))
+	sleepTime := float64(sph) * duration * 1000.0
+	time.Sleep(time.Duration(sleepTime) * time.Millisecond)
 }
 
 // ActionTime returns stopTime in simulation hours that stationing on StationTrack will take.
-func (st *StationTrack) Sleep(train *Train, sph int) {
+func (st *StationTrack) Sleep(speed int, sph int) {
 	duration := float64(st.stopTime) / 60.0
-	sleepTime := float64(sph) * duration
-	time.Sleep(time.Duration(sleepTime) * time.Second)
+	sleepTime := float64(sph) * duration * 1000.0
+	time.Sleep(time.Duration(sleepTime) * time.Millisecond)
 }
 
 // ActionTime returns stopTime in simulation hours that rotating on Turntable will take.
-func (tt *Turntable) Sleep(train *Train, sph int) {
+func (tt *Turntable) Sleep(speed int, sph int) {
 	duration := float64(tt.turnTime) / 60.0
-	sleepTime := float64(sph) * duration
-	time.Sleep(time.Duration(sleepTime) * time.Second)
+	sleepTime := float64(sph) * duration * 1000.0
+	time.Sleep(time.Duration(sleepTime) * time.Millisecond)
 }
 
 // ID returns unexported field id
@@ -221,6 +342,54 @@ func (st *StationTrack) ID() int { return st.id }
 // ID returns unexported field id
 func (tt *Turntable) ID() int { return tt.id }
 
+func (nt *NormalTrack) Reserve() bool {
+	select {
+	case nt.Reserved <- true:
+		nt.Available <- true
+		return true
+	default:
+		return false
+	}
+}
+func (st *StationTrack) Reserve() bool {
+	select {
+	case st.Reserved <- true:
+		st.Available <- true
+		return true
+	default:
+		return false
+	}
+}
+func (tt *Turntable) Reserve() bool {
+	select {
+	case tt.Reserved <- true:
+		tt.Available <- true
+		return true
+	default:
+		return false
+	}
+}
+
+func (nt *NormalTrack) Do() {
+	nt.Done <- true
+}
+func (st *StationTrack) Do() {
+	st.Done <- true
+}
+func (tt *Turntable) Do() {
+	tt.Done <- true
+}
+
+func (nt *NormalTrack) Cancel() {
+	nt.Cancelled <- true
+}
+func (st *StationTrack) Cancel() {
+	st.Cancelled <- true
+}
+func (tt *Turntable) Cancel() {
+	tt.Cancelled <- true
+}
+
 // String returns human-friendly label for NormalTrack
 func (nt *NormalTrack) String() string { return "NormalTrack" + strconv.Itoa(nt.id) }
 
@@ -228,25 +397,25 @@ func (nt *NormalTrack) String() string { return "NormalTrack" + strconv.Itoa(nt.
 func (st *StationTrack) String() string { return fmt.Sprintf("StationTrack%d %s", st.id, st.Name) }
 
 // String returns human-friendly label for Turntable
-func (tt *Turntable) String() string { return "Turntable " + strconv.Itoa(tt.id) }
+func (tt *Turntable) String() string { return "Turntable" + strconv.Itoa(tt.id) }
 
 // GoString returns more verbose human-friendly representation for NormalTrack
 func (nt *NormalTrack) GoString() string {
 	return fmt.Sprintf(
-		"rails.NormalTrack:%d{len:%d, limit:%d}",
-		nt.id, nt.len, nt.limit)
+		"rails.NormalTrack:%d{len:%d, limit:%d, RepairTime:%d}",
+		nt.id, nt.len, nt.limit, nt.repairTime)
 }
 
 // GoString returns more verbose human-friendly representation for StationTrack
 func (st *StationTrack) GoString() string {
 	return fmt.Sprintf(
-		"rails.StationTrack:%d:%s{stopTime:%d}",
-		st.id, st.Name, st.stopTime)
+		"rails.StationTrack:%d:%s{stopTime:%d, RepairTime:%d}",
+		st.id, st.Name, st.stopTime, st.repairTime)
 }
 
 // GoString returns more verbose human-friendly representation for Turntable
 func (tt *Turntable) GoString() string {
 	return fmt.Sprintf(
-		"rails.Turntable:%d{stopTime:%d}",
-		tt.id, tt.turnTime)
+		"rails.Turntable:%d{stopTime:%d, RepairTime:%d}",
+		tt.id, tt.turnTime, tt.repairTime)
 }

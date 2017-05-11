@@ -1,13 +1,13 @@
 # seconds for hour simulation
-10
+5
 
 # simulation clock start
 # hours minutes
 12 00
 
 # amount of defined objects:
-# trains turntables normalTracks stationTracks
-2 8 7 6
+# repairTeams trains turntables normalTracks stationTracks
+1 2 8 7 7
 
 # turntables:
 # id time repairTime
@@ -38,18 +38,22 @@
 3 glw 15 40 4 5
 4 glw 20 30 4 5
 5 woj 10 15 6 7
+6 repair 0 0 2 2
+
+# repairTeam:
+# id speed stationId
+0 250 6
 
 # trains:
 # id speed capacity repairTime name len(route)
 # route by ids
 
 # train one
-0 100 220 60 one 4
-3 5 7 6
-# 0 1 4 5 7 6 3 2
+0 100 220 60 one 6
+# 3 5 7 6
+0 2 3 5 4 1
 
 # train two
-1 200 90 90 two 4
-6 7 5 3
-# 6 7 5 4 1 0 2 3
-
+1 200 90 90 two 8
+#6 7 5 3
+6 7 5 4 1 0 2 3
