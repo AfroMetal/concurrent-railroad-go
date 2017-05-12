@@ -67,7 +67,7 @@ var start time.Time                // simulation start time for calculating simu
 var statisticsWriter *bufio.Writer // statistics fiel writer
 var statisticsChannel = make(chan string, 256)
 
-var repairChannel = make(chan rails.BrokenFella, 256)
+var repairChannel = make(chan rails.BrokenFella)
 var connections rails.Connections
 var turntables []*rails.Turntable
 var normalTracks []*rails.NormalTrack
@@ -80,7 +80,7 @@ var generateDotFile = flag.Bool("dot", false, "generate Graphviz .dot file of ra
 var inFilename = flag.String("in", "input", "input file containing railroad description")
 var outFilename = flag.String("out", "output", "output file for statistics saving, will be overwritten")
 
-func search(currentPath rails.Path, from rails.BrokenFella, destination rails.Neighbors) rails.Path {
+func search(currentPath rails.Path, from rails.BrokenFella, destination rails.Neighbors, resp chan rails.Path) {
 	for _, track := range from.Neighbors(connections) {
 		switch track.(type) {
 		case *rails.Turntable:
@@ -88,11 +88,17 @@ func search(currentPath rails.Path, from rails.BrokenFella, destination rails.Ne
 			select {
 			case <-track.Available:
 				for _, d := range destination {
-					if track == d {
-						return append(currentPath, track)
+					d, ok := d.(*rails.Turntable)
+					if ok && track == d {
+						select {
+						case resp <- append(currentPath, track):
+							return
+						default:
+							continue
+						}
 					}
 				}
-				return search(append(currentPath, track), track, destination)
+				search(append(currentPath, track), track, destination, resp)
 			default:
 				continue
 			}
@@ -101,11 +107,17 @@ func search(currentPath rails.Path, from rails.BrokenFella, destination rails.Ne
 			select {
 			case <-track.Available:
 				for _, d := range destination {
-					if track == d {
-						return append(currentPath, track)
+					d, ok := d.(*rails.NormalTrack)
+					if ok && track == d {
+						select {
+						case resp <- append(currentPath, track):
+							return
+						default:
+							continue
+						}
 					}
 				}
-				return search(append(currentPath, track), track, destination)
+				search(append(currentPath, track), track, destination, resp)
 			default:
 				continue
 			}
@@ -114,17 +126,22 @@ func search(currentPath rails.Path, from rails.BrokenFella, destination rails.Ne
 			select {
 			case <-track.Available:
 				for _, d := range destination {
-					if track == d {
-						return append(currentPath, track)
+					d, ok := d.(*rails.StationTrack)
+					if ok && track == d {
+						select {
+						case resp <- append(currentPath, track):
+							return
+						default:
+							continue
+						}
 					}
 				}
-				return search(append(currentPath, track), track, destination)
+				search(append(currentPath, track), track, destination, resp)
 			default:
 				continue
 			}
 		}
 	}
-	return currentPath
 }
 
 func main() {
@@ -209,12 +226,29 @@ func main() {
 			for {
 				select {
 				case <-self.Broke:
-					repairChannel <- self
-					<-self.Repaired
+					select {
+					case repairChannel <- self:
+						log.Printf("%s %v broke", clockTime(), self)
+						<-self.Repaired
+						log.Printf("%s %v repaired", clockTime(), self)
+					default:
+						continue
+					}
 				case <-self.Reserved:
 					log.Printf("%s %v is reserved", clockTime(), self)
-					<-self.Cancelled
-					log.Printf("%s %v reservation cancelled", clockTime(), self)
+					select {
+					case <-self.Cancelled:
+						log.Printf("%s %v reservation cancelled", clockTime(), self)
+					case rt := <-self.TeamRider:
+						rt.Done <- true
+
+						log.Printf("%s %v rotates at %v",
+							clockTime(), rt, self)
+						self.Sleep(rt.Speed(), secondsPerHour)
+						self.Done <- true
+						<-rt.Done
+						log.Printf("%s %v reservation cancelled", clockTime(), self)
+					}
 				case t := <-self.Rider:
 					t.Done <- true
 
@@ -228,15 +262,22 @@ func main() {
 					t.SetAt(self)
 					log.Printf("%s %v rotates at %v",
 						clockTime(), t, self)
-					//ts.Delay(time)
 					self.Sleep(t.Speed(), secondsPerHour)
 
 					self.Done <- true
 					<-t.Done
 					if rand.Float64() < 0.08 {
 						self.Broke <- self
-						log.Printf("%s %v broke", clockTime(), self)
 					}
+				case rt := <-self.TeamRider:
+					rt.Done <- true
+
+					log.Printf("%s %v rotates at %v",
+						clockTime(), rt, self)
+					self.Sleep(rt.Speed(), secondsPerHour)
+
+					self.Done <- true
+					<-rt.Done
 				}
 			}
 		}(turntables[i])
@@ -269,12 +310,30 @@ func main() {
 			for {
 				select {
 				case <-self.Broke:
-					repairChannel <- self
-					<-self.Repaired
+					select {
+					case repairChannel <- self:
+						log.Printf("%s %v broke", clockTime(), self)
+						<-self.Repaired
+						log.Printf("%s %v repaired", clockTime(), self)
+					default:
+						continue
+					}
 				case <-self.Reserved:
 					log.Printf("%s %v is reserved", clockTime(), self)
-					<-self.Cancelled
-					log.Printf("%s %v reservation cancelled", clockTime(), self)
+					select {
+					case <-self.Cancelled:
+						log.Printf("%s %v reservation cancelled", clockTime(), self)
+					case rt := <-self.TeamRider:
+						rt.Done <- true
+
+						log.Printf("%s %v travels along %v",
+							clockTime(), rt, self)
+						self.Sleep(rt.Speed(), secondsPerHour)
+
+						self.Done <- true
+						<-rt.Done
+						log.Printf("%s %v reservation cancelled", clockTime(), self)
+					}
 				case t := <-self.Rider:
 					t.Done <- true
 
@@ -287,8 +346,16 @@ func main() {
 					<-t.Done
 					if rand.Float64() < 0.05 {
 						self.Broke <- self
-						log.Printf("%s %v broke", clockTime(), self)
 					}
+				case rt := <-self.TeamRider:
+					rt.Done <- true
+
+					log.Printf("%s %v travels along %v",
+						clockTime(), rt, self)
+					self.Sleep(rt.Speed(), secondsPerHour)
+
+					self.Done <- true
+					<-rt.Done
 				}
 			}
 		}(normalTracks[i])
@@ -322,12 +389,30 @@ func main() {
 			for {
 				select {
 				case <-self.Broke:
-					repairChannel <- self
-					<-self.Repaired
+					select {
+					case repairChannel <- self:
+						log.Printf("%s %v broke", clockTime(), self)
+						<-self.Repaired
+						log.Printf("%s %v repaired", clockTime(), self)
+					default:
+						continue
+					}
 				case <-self.Reserved:
 					log.Printf("%s %v is reserved", clockTime(), self)
-					<-self.Cancelled
-					log.Printf("%s %v reservation cancelled", clockTime(), self)
+					select {
+					case <-self.Cancelled:
+						log.Printf("%s %v reservation cancelled", clockTime(), self)
+					case rt := <-self.TeamRider:
+						rt.Done <- true
+
+						log.Printf("%s %v waits on %v",
+							clockTime(), rt, self)
+						self.Sleep(rt.Speed(), secondsPerHour)
+
+						self.Done <- true
+						<-rt.Done
+						log.Printf("%s %v reservation cancelled", clockTime(), self)
+					}
 				case t := <-self.Rider:
 					t.Done <- true
 
@@ -343,8 +428,16 @@ func main() {
 					<-t.Done
 					if rand.Float64() < 0.01 {
 						self.Broke <- self
-						log.Printf("%s %v broke", clockTime(), self)
 					}
+				case rt := <-self.TeamRider:
+					rt.Done <- true
+
+					log.Printf("%s %v waits on %v",
+						clockTime(), rt, self)
+					self.Sleep(rt.Speed(), secondsPerHour)
+
+					self.Done <- true
+					<-rt.Done
 				}
 			}
 		}(stationTracks[i])
@@ -400,16 +493,23 @@ func main() {
 
 		go func(self *rails.RepairTeam) {
 		Loop:
+
+			self.Station().TeamRider <- self
+			<-self.Done
+			<-self.Station().Done
+
 			for {
 				client := <-repairChannel
+				log.Printf("%s %v prepares to repair %v",
+					clockTime(), self, client)
 				destinations := client.Neighbors(connections)
+
 				for _, d := range destinations {
 					if self.Station() == d {
 						log.Printf("%s %v repairs %v from depot", clockTime(), self, client)
 						repairTime := float64(sph) * client.RepairTime() * 1000.0
 						time.Sleep(time.Duration(repairTime) * time.Millisecond)
 						client.Repair()
-						log.Printf("%s %v repaired", clockTime(), client)
 						goto Loop
 					}
 				}
@@ -424,7 +524,7 @@ func main() {
 					}
 				}
 				for _, st := range stationTracks {
-					if st == client || st == self.Station() {
+					if st == client {
 						continue
 					} else if st.Reserve() {
 						reserved = append(reserved, st)
@@ -438,10 +538,17 @@ func main() {
 					}
 				}
 
-				path := search(rails.Path{self.Station().Neighbors(connections)[0]}, client, destinations)
-				for i, p := range path {
-					log.Printf("%d) %v\n", i, p)
+				resp := make(chan rails.Path)
+				go search(rails.Path{self.Station()}, self.Station(), destinations, resp)
+				path := <-resp
+
+				logString := fmt.Sprintf("%s %v found path to faulty %v:\n",
+					clockTime(), self, client)
+				for i, t := range path {
+					logString += fmt.Sprintf("%d. %v\n", i, t)
 				}
+
+				log.Print(logString)
 
 			ForAllReserved:
 				for _, r := range reserved {
@@ -453,23 +560,46 @@ func main() {
 					r.Cancel()
 				}
 
-				for _, track := range path {
-					log.Printf("%s %v is on %v", clockTime(), self, track)
-					track.Sleep(self.Speed(), secondsPerHour)
+				for _, track := range path[1:] {
+					switch track.(type) {
+					case *rails.StationTrack:
+						track := track.(*rails.StationTrack)
+						track.TeamRider <- self
+						<-track.Done
+					case *rails.NormalTrack:
+						track := track.(*rails.NormalTrack)
+						track.TeamRider <- self
+						<-track.Done
+					case *rails.Turntable:
+						track := track.(*rails.Turntable)
+						track.TeamRider <- self
+						<-track.Done
+					}
 				}
 
 				log.Printf("%s %v repairs %v from %v", clockTime(), self, client, path[len(path)-1])
 				repairTime := float64(sph) * client.RepairTime() * 1000.0
 				time.Sleep(time.Duration(repairTime) * time.Millisecond)
-
 				client.Repair()
-				log.Printf("%s %v repaired", clockTime(), client)
 
-				for i := len(path) - 1; i >= 0; i-- {
-					log.Printf("%s %v backs-up on %v", clockTime(), self, path[i])
-					path[i].Sleep(self.Speed(), secondsPerHour)
-					path[i].Cancel()
+				for i := len(path) - 2; i >= 0; i-- {
+					track := path[i]
+					switch track.(type) {
+					case *rails.StationTrack:
+						track := track.(*rails.StationTrack)
+						track.TeamRider <- self
+						<-track.Done
+					case *rails.NormalTrack:
+						track := track.(*rails.NormalTrack)
+						track.TeamRider <- self
+						<-track.Done
+					case *rails.Turntable:
+						track := track.(*rails.Turntable)
+						track.TeamRider <- self
+						<-track.Done
+					}
 				}
+
 				log.Printf("%s %v returned to depot", clockTime(), self)
 			}
 		}(repairTeams[i])
@@ -589,8 +719,14 @@ func main() {
 			for {
 				select {
 				case <-t.Broke:
-					repairChannel <- t
-					<-t.Repaired
+					select {
+					case repairChannel <- t:
+						log.Printf("%s %v broke", clockTime(), t)
+						<-t.Repaired
+						log.Printf("%s %v repaired", clockTime(), t)
+					default:
+						continue
+					}
 				default:
 					// get nearest Turntables
 					fst, snd := t.Connection()
@@ -624,7 +760,6 @@ func main() {
 					<-snd.Done
 					if rand.Float64() < 0.005 {
 						t.Broke <- t
-						log.Printf("%s %v broke", clockTime(), t)
 					}
 				}
 			}

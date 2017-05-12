@@ -74,9 +74,6 @@ func (t *Train) NextPosition() {
 	t.index = (t.index + 1) % len(t.route)
 }
 
-// Delay pauses Train tt for at least st seconds.
-func (t *Train) Delay(s float64) { time.Sleep(time.Duration(s*1000.0) * time.Millisecond) }
-
 // String returns human-friendly label for Train t
 func (t *Train) String() string { return fmt.Sprintf("Train%d %s", t.id, strings.ToUpper(t.Name)) }
 
@@ -162,7 +159,6 @@ type RepairTeam struct {
 	id      int // Train's identificator
 	speed   int // maximum speed in km/h
 	station *StationTrack
-	Path    chan Path // path to damaged fella
 	Done    chan bool
 }
 
@@ -171,7 +167,6 @@ func NewRepairTeam(id, speed int, station *StationTrack) (team *RepairTeam) {
 		id:      id,
 		speed:   speed,
 		station: station,
-		Path:    make(chan Path),
 		Done:    make(chan bool)}
 	return
 }
@@ -211,6 +206,7 @@ type NormalTrack struct {
 	first      *Turntable
 	second     *Turntable
 	Rider      chan *Train
+	TeamRider  chan *RepairTeam
 	Done       chan bool
 	Reserved   chan bool
 	Available  chan bool
@@ -229,6 +225,7 @@ type StationTrack struct {
 	first      *Turntable
 	second     *Turntable
 	Rider      chan *Train
+	TeamRider  chan *RepairTeam
 	Done       chan bool
 	Reserved   chan bool
 	Available  chan bool
@@ -244,6 +241,7 @@ type Turntable struct {
 	turnTime   int // minimum stopTime needed to rotate the train
 	repairTime int
 	Rider      chan *Train
+	TeamRider  chan *RepairTeam
 	Done       chan bool
 	Reserved   chan bool
 	Available  chan bool
@@ -264,6 +262,7 @@ func NewNormalTrack(id, len, limit, repTime int, fst, snd *Turntable) (nt *Norma
 		first:      fst,
 		second:     snd,
 		Rider:      make(chan *Train),
+		TeamRider:  make(chan *RepairTeam),
 		Done:       make(chan bool),
 		Reserved:   make(chan bool),
 		Available:  make(chan bool, 1),
@@ -285,6 +284,7 @@ func NewStationTrack(id int, name string, time, repTime int, fst, snd *Turntable
 		first:      fst,
 		second:     snd,
 		Rider:      make(chan *Train),
+		TeamRider:  make(chan *RepairTeam),
 		Done:       make(chan bool),
 		Reserved:   make(chan bool),
 		Available:  make(chan bool, 1),
@@ -303,6 +303,7 @@ func NewTurntable(id, time, repTime int) (tt *Turntable) {
 		turnTime:   time,
 		repairTime: repTime,
 		Rider:      make(chan *Train),
+		TeamRider:  make(chan *RepairTeam),
 		Done:       make(chan bool),
 		Reserved:   make(chan bool),
 		Available:  make(chan bool, 1),
@@ -345,7 +346,12 @@ func (tt *Turntable) ID() int { return tt.id }
 func (nt *NormalTrack) Reserve() bool {
 	select {
 	case nt.Reserved <- true:
-		nt.Available <- true
+		select {
+		case nt.Available <- true:
+		default:
+			<-nt.Available
+			nt.Available <- true
+		}
 		return true
 	default:
 		return false
@@ -354,7 +360,12 @@ func (nt *NormalTrack) Reserve() bool {
 func (st *StationTrack) Reserve() bool {
 	select {
 	case st.Reserved <- true:
-		st.Available <- true
+		select {
+		case st.Available <- true:
+		default:
+			<-st.Available
+			st.Available <- true
+		}
 		return true
 	default:
 		return false
@@ -363,7 +374,12 @@ func (st *StationTrack) Reserve() bool {
 func (tt *Turntable) Reserve() bool {
 	select {
 	case tt.Reserved <- true:
-		tt.Available <- true
+		select {
+		case tt.Available <- true:
+		default:
+			<-tt.Available
+			tt.Available <- true
+		}
 		return true
 	default:
 		return false

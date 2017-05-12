@@ -7,7 +7,7 @@
 
 # amount of defined objects:
 # repairTeams trains turntables normalTracks stationTracks
-1 2 8 7 7
+1 2 8 8 7
 
 # turntables:
 # id time repairTime
@@ -29,6 +29,7 @@
 4 35 80 35 3 5
 5 20 90 40 3 6
 6 50 100 60 5 7
+7 100 120 80 0 2
 
 # stationTracks:
 # id name time repairTime from to
@@ -49,7 +50,7 @@
 # route by ids
 
 # train one
-0 100 220 60 one 6
+0 120 220 60 one 6
 # 3 5 7 6
 0 2 3 5 4 1
 
