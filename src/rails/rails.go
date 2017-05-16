@@ -13,6 +13,25 @@ import (
 	"time"
 )
 
+type ConnectionsGraph []map[int][]Track
+
+func NewConnectionsGraph(n int) (connections ConnectionsGraph) {
+	connections = make(ConnectionsGraph, n)
+	for i := range connections {
+		connections[i] = make(map[int][]Track)
+		for j := range connections[i] {
+			connections[i][j] = []Track{}
+		}
+	}
+	return
+}
+
+type Turntables []*Turntable
+type NormalTracks []*NormalTrack
+type StationTracks []*StationTrack
+type Trains []*Train
+type RepairTeams []*RepairTeam
+
 // Train stores all parameters for train instance needed for its simulation.
 // Only exported field is Name, all operations concerning Train type are done
 // by appropriate functions.
@@ -85,7 +104,7 @@ func (t *Train) GoString() string {
 }
 
 // Route is a slice of Turntable pointers that represents cycle in railroad.
-type Route []*Turntable
+type Route Turntables
 
 func (r Route) String() string {
 	ids := make([]string, len(r))
@@ -104,14 +123,13 @@ func (r Route) GoString() string {
 	return "rails.Route{" + strings.Join(ids, ", ") + "}"
 }
 
-type Connections []map[int][]Track
 type Neighbors []Track
 type Path []Track
 
 type BrokenFella interface {
 	RepairTime() float64
 	Repair()
-	Neighbors(connections Connections) (ns Neighbors)
+	Neighbors(connections ConnectionsGraph) (ns Neighbors)
 }
 
 func (t *Train) RepairTime() float64 { return float64(t.repairTime) / 60.0 }
@@ -130,12 +148,12 @@ func (nt *NormalTrack) Repair() { nt.Repaired <- true }
 
 func (st *StationTrack) Repair() { st.Repaired <- true }
 
-func (t *Train) Neighbors(connections Connections) (ns Neighbors) {
+func (t *Train) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
 	pos := t.at
 	return pos.(BrokenFella).Neighbors(connections)
 }
 
-func (tt *Turntable) Neighbors(connections Connections) (ns Neighbors) {
+func (tt *Turntable) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
 	i := tt.id
 	for j := range connections[i] {
 		for _, track := range connections[i][j] {
@@ -145,12 +163,12 @@ func (tt *Turntable) Neighbors(connections Connections) (ns Neighbors) {
 	return
 }
 
-func (nt *NormalTrack) Neighbors(connections Connections) (ns Neighbors) {
+func (nt *NormalTrack) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
 	ns = Neighbors{nt.first, nt.second}
 	return
 }
 
-func (st *StationTrack) Neighbors(connections Connections) (ns Neighbors) {
+func (st *StationTrack) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
 	ns = Neighbors{st.first, st.second}
 	return
 }
@@ -201,7 +219,7 @@ type Track interface {
 type NormalTrack struct {
 	id         int // identificator
 	len        int // track length in km
-	limit      int // speed limit on trac in km/h
+	limit      int // speed limit on track in km/h
 	repairTime int
 	first      *Turntable
 	second     *Turntable
@@ -404,6 +422,13 @@ func (st *StationTrack) Cancel() {
 }
 func (tt *Turntable) Cancel() {
 	tt.Cancelled <- true
+}
+
+func (nt *NormalTrack) Siblings(connections ConnectionsGraph) []Track {
+	return connections[nt.first.id][nt.second.id]
+}
+func (st *StationTrack) Siblings(connections ConnectionsGraph) []Track {
+	return connections[st.first.id][st.second.id]
 }
 
 // String returns human-friendly label for NormalTrack

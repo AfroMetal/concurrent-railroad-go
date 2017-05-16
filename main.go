@@ -68,12 +68,12 @@ var statisticsWriter *bufio.Writer // statistics fiel writer
 var statisticsChannel = make(chan string, 256)
 
 var repairChannel = make(chan rails.BrokenFella)
-var connections rails.Connections
-var turntables []*rails.Turntable
-var normalTracks []*rails.NormalTrack
-var stationTracks []*rails.StationTrack
-var trains []*rails.Train
-var repairTeams []*rails.RepairTeam
+var connections rails.ConnectionsGraph
+var turntables rails.Turntables
+var normalTracks rails.NormalTracks
+var stationTracks rails.StationTracks
+var trains rails.Trains
+var repairTeams rails.RepairTeams
 
 var verbose = flag.Bool("verbose", false, "print state changes in real time")
 var generateDotFile = flag.Bool("dot", false, "generate Graphviz .dot file of railroad")
@@ -200,15 +200,9 @@ func main() {
 		"Simulation starts at %02d:%02d\n",
 		ts, nts, sts, tts, sph, clock.h, clock.m)
 
-	connections = make([]map[int][]rails.Track, tts)
-	for i := range connections {
-		connections[i] = make(map[int][]rails.Track)
-		for j := range connections[i] {
-			connections[i][j] = []rails.Track{}
-		}
-	}
+	connections = rails.NewConnectionsGraph(tts)
 
-	turntables = make([]*rails.Turntable, tts)
+	turntables = make(rails.Turntables, tts)
 	for i := range turntables {
 		fields, err = readFields(scan, 3)
 		check(err)
@@ -283,7 +277,7 @@ func main() {
 		}(turntables[i])
 	}
 
-	normalTracks = make([]*rails.NormalTrack, nts)
+	normalTracks = make(rails.NormalTracks, nts)
 	for i := range normalTracks {
 		fields, err = readFields(scan, 6)
 		check(err)
@@ -361,7 +355,7 @@ func main() {
 		}(normalTracks[i])
 	}
 
-	stationTracks = make([]*rails.StationTrack, sts)
+	stationTracks = make(rails.StationTracks, sts)
 	for i := range stationTracks {
 		fields, err = readFields(scan, 6)
 		check(err)
@@ -477,7 +471,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	repairTeams = make([]*rails.RepairTeam, rts)
+	repairTeams = make(rails.RepairTeams, rts)
 	for i := range repairTeams {
 		fields, err = readFields(scan, 3)
 		check(err)
@@ -587,12 +581,34 @@ func main() {
 					switch track.(type) {
 					case *rails.StationTrack:
 						track := track.(*rails.StationTrack)
-						track.TeamRider <- self
-						<-track.Done
+					Loop1:
+						for {
+							for _, sibling := range track.Siblings(connections) {
+								st := sibling.(*rails.StationTrack)
+								select {
+								case st.TeamRider <- self:
+									<-st.Done
+									break Loop1
+								default:
+									continue
+								}
+							}
+						}
 					case *rails.NormalTrack:
 						track := track.(*rails.NormalTrack)
-						track.TeamRider <- self
-						<-track.Done
+					Loop2:
+						for {
+							for _, sibling := range track.Siblings(connections) {
+								nt := sibling.(*rails.NormalTrack)
+								select {
+								case nt.TeamRider <- self:
+									<-nt.Done
+									break Loop2
+								default:
+									continue
+								}
+							}
+						}
 					case *rails.Turntable:
 						track := track.(*rails.Turntable)
 						track.TeamRider <- self
@@ -605,7 +621,7 @@ func main() {
 		}(repairTeams[i])
 	}
 
-	trains = make([]*rails.Train, ts)
+	trains = make(rails.Trains, ts)
 	for i := range trains {
 		fields, err = readFields(scan, 6)
 		check(err)
