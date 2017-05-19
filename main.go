@@ -80,70 +80,6 @@ var generateDotFile = flag.Bool("dot", false, "generate Graphviz .dot file of ra
 var inFilename = flag.String("in", "input", "input file containing railroad description")
 var outFilename = flag.String("out", "output", "output file for statistics saving, will be overwritten")
 
-func search(currentPath rails.Path, from rails.BrokenFella, destination rails.Neighbors, resp chan rails.Path) {
-	for _, track := range from.Neighbors(connections) {
-		switch track.(type) {
-		case *rails.Turntable:
-			track := track.(*rails.Turntable)
-			select {
-			case <-track.Available:
-				for _, d := range destination {
-					d, ok := d.(*rails.Turntable)
-					if ok && track == d {
-						select {
-						case resp <- append(currentPath, track):
-							return
-						default:
-							continue
-						}
-					}
-				}
-				search(append(currentPath, track), track, destination, resp)
-			default:
-				continue
-			}
-		case *rails.NormalTrack:
-			track := track.(*rails.NormalTrack)
-			select {
-			case <-track.Available:
-				for _, d := range destination {
-					d, ok := d.(*rails.NormalTrack)
-					if ok && track == d {
-						select {
-						case resp <- append(currentPath, track):
-							return
-						default:
-							continue
-						}
-					}
-				}
-				search(append(currentPath, track), track, destination, resp)
-			default:
-				continue
-			}
-		case *rails.StationTrack:
-			track := track.(*rails.StationTrack)
-			select {
-			case <-track.Available:
-				for _, d := range destination {
-					d, ok := d.(*rails.StationTrack)
-					if ok && track == d {
-						select {
-						case resp <- append(currentPath, track):
-							return
-						default:
-							continue
-						}
-					}
-				}
-				search(append(currentPath, track), track, destination, resp)
-			default:
-				continue
-			}
-		}
-	}
-}
-
 func main() {
 	flag.Parse()
 
@@ -438,25 +374,27 @@ func main() {
 	}
 
 	if *generateDotFile {
-		out, err := os.Create(*outFilename + ".gv")
+		out, err := os.Create(*outFilename + ".dot")
 		check(err)
 		defer out.Close()
 		dotWriter := bufio.NewWriter(out)
 
-		dotWriter.WriteString("graph " + *inFilename + " {" +
-			"graph [pad=\"0.25\", nodesep=\"0.5\", ranksep=\"1.0\"];\n")
+		dotWriter.WriteString(
+			fmt.Sprintf("graph %s {graph [pad=\"0.25\", nodesep=\"0.5\", ranksep=\"1.0\"];\n", *inFilename))
 
 		for i := range connections {
-			for j := range connections[i] {
+			for j := 0; j <= i; j++ {
 				for _, t := range connections[i][j] {
-					dotWriter.WriteString("\t" + strconv.Itoa(i) + " -- " + strconv.Itoa(j))
+					dotWriter.WriteString(
+						fmt.Sprintf("\t%d -- %d", i, j))
 					switch t.(type) {
 					case *rails.StationTrack:
 						s, _ := t.(*rails.StationTrack)
-						dotWriter.WriteString(" [label=" + s.Name + ", color=blue]\n")
-						dotWriter.WriteString("\t{rank=same; " + strconv.Itoa(i) + "; " + strconv.Itoa(j) + "}\n")
+						dotWriter.WriteString(
+							fmt.Sprintf(" [label=\"%d:%s\", color=blue]\n", s.ID(), s.Name))
 					default:
-						dotWriter.WriteString("\n")
+						dotWriter.WriteString(
+							fmt.Sprintf(" [label=%d] \n", t.ID()))
 					}
 				}
 				dotWriter.Flush()
@@ -466,7 +404,7 @@ func main() {
 		dotWriter.WriteString("}\n")
 		dotWriter.Flush()
 
-		fmt.Printf("Graphviz .gv file generated under: %s\n", out.Name())
+		fmt.Printf("Graphviz .dot file generated under: %s\n", out.Name())
 
 		os.Exit(0)
 	}
@@ -533,7 +471,7 @@ func main() {
 				}
 
 				resp := make(chan rails.Path)
-				go search(rails.Path{self.Station()}, self.Station(), destinations, resp)
+				go rails.SearchForPath(rails.Path{self.Station()}, self.Station(), destinations, resp, connections)
 				path := <-resp
 
 				logString := fmt.Sprintf("%s %v found path to faulty %v:\n",
