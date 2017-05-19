@@ -39,7 +39,7 @@
 3 glw 15 40 4 5
 4 glw 20 30 4 5
 5 woj 10 15 6 7
-6 repair 0 0 2 2
+6 repair 30 0 2 2
 
 # repairTeam:
 # id speed stationId

@@ -37,7 +37,7 @@ type RepairTeams []*RepairTeam
 // by appropriate functions.
 // A Train must be created using NewTrain.
 type Train struct {
-	id         int // Train's identificator
+	id         int // Train's identification
 	speed      int // maximum speed in km/h
 	capacity   int // how many people can board the train
 	repairTime int
@@ -85,13 +85,9 @@ func (t *Train) Connection() (from, to *Turntable) {
 // increments index of tt'st route.
 // Returns stopTime tt will have to spend on new position.
 // MoveTo should be used after after successful lock on next position.
-func (t *Train) SetAt(at Track) {
-	t.at = at
-}
+func (t *Train) SetAt(at Track) { t.at = at }
 
-func (t *Train) NextPosition() {
-	t.index = (t.index + 1) % len(t.route)
-}
+func (t *Train) NextPosition() { t.index = (t.index + 1) % len(t.route) }
 
 // String returns human-friendly label for Train t
 func (t *Train) String() string { return fmt.Sprintf("Train%d %s", t.id, strings.ToUpper(t.Name)) }
@@ -132,27 +128,20 @@ type BrokenFella interface {
 	Neighbors(connections ConnectionsGraph) (ns Neighbors)
 }
 
-func (t *Train) RepairTime() float64 { return float64(t.repairTime) / 60.0 }
-
-func (tt *Turntable) RepairTime() float64 { return float64(tt.repairTime) / 60.0 }
-
-func (nt *NormalTrack) RepairTime() float64 { return float64(nt.repairTime) / 60.0 }
-
+func (t *Train) RepairTime() float64         { return float64(t.repairTime) / 60.0 }
+func (tt *Turntable) RepairTime() float64    { return float64(tt.repairTime) / 60.0 }
+func (nt *NormalTrack) RepairTime() float64  { return float64(nt.repairTime) / 60.0 }
 func (st *StationTrack) RepairTime() float64 { return float64(st.repairTime) / 60.0 }
 
-func (t *Train) Repair() { t.Repaired <- true }
-
-func (tt *Turntable) Repair() { tt.Repaired <- true }
-
-func (nt *NormalTrack) Repair() { nt.Repaired <- true }
-
+func (t *Train) Repair()         { t.Repaired <- true }
+func (tt *Turntable) Repair()    { tt.Repaired <- true }
+func (nt *NormalTrack) Repair()  { nt.Repaired <- true }
 func (st *StationTrack) Repair() { st.Repaired <- true }
 
 func (t *Train) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
 	pos := t.at
 	return pos.(BrokenFella).Neighbors(connections)
 }
-
 func (tt *Turntable) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
 	i := tt.id
 	for j := range connections[i] {
@@ -162,21 +151,20 @@ func (tt *Turntable) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
 	}
 	return
 }
-
 func (nt *NormalTrack) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
 	ns = Neighbors{nt.first, nt.second}
 	return
 }
-
 func (st *StationTrack) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
 	ns = Neighbors{st.first, st.second}
 	return
 }
 
 type RepairTeam struct {
-	id      int // Train's identificator
+	id      int // Train's identification
 	speed   int // maximum speed in km/h
 	station *StationTrack
+	at      Track // current position, Track the repair team occupies
 	Done    chan bool
 }
 
@@ -185,12 +173,15 @@ func NewRepairTeam(id, speed int, station *StationTrack) (team *RepairTeam) {
 		id:      id,
 		speed:   speed,
 		station: station,
+		at:      station,
 		Done:    make(chan bool)}
 	return
 }
 
 func (rt *RepairTeam) Station() *StationTrack { return rt.station }
 func (rt *RepairTeam) Speed() int             { return rt.speed }
+func (rt *RepairTeam) At() Track              { return rt.at }
+func (rt *RepairTeam) SetAt(at Track)         { rt.at = at }
 
 // String returns human-friendly label for Train t
 func (rt *RepairTeam) String() string { return fmt.Sprintf("RepairTeam%d", rt.id) }
@@ -198,13 +189,13 @@ func (rt *RepairTeam) String() string { return fmt.Sprintf("RepairTeam%d", rt.id
 // GoString returns more verbose human-friendly representation of Train t
 func (rt *RepairTeam) GoString() string {
 	return fmt.Sprintf(
-		"rails.RepairTeam:%d{speed:%d, stationId:%d}",
-		rt.id, rt.speed, rt.station.id)
+		"rails.RepairTeam:%d{speed:%d, station:%s, at:%s}",
+		rt.id, rt.speed, rt.station, rt.at)
 }
 
 func SearchForPath(currentPath Path, from Track, destination Neighbors, resp chan Path, graph ConnectionsGraph) {
 	for _, track := range from.Neighbors(graph) {
-		switch track.IsAvailable() {
+		switch track.isAvailable() {
 		case true:
 			for _, d := range destination {
 				if track == d {
@@ -229,9 +220,8 @@ type Track interface {
 	Sleep(speed int, sph int)
 	ID() int
 	Reserve() bool
-	Do()
 	Cancel()
-	IsAvailable() bool
+	isAvailable() bool
 	Neighbors(connections ConnectionsGraph) (ns Neighbors)
 	String() string
 	GoString() string
@@ -240,7 +230,7 @@ type Track interface {
 // NormalTrack represents Track interface implementation that is used to pass distance between two Turntables.
 // It is an edge in railroad representation.
 type NormalTrack struct {
-	id         int // identificator
+	id         int // identification
 	len        int // track length in km
 	limit      int // speed limit on track in km/h
 	repairTime int
@@ -259,7 +249,7 @@ type NormalTrack struct {
 // StationTrack represents Track interface implementation to stationed Trains.
 // It is an edge in railroad representation.
 type StationTrack struct {
-	id         int // identificator
+	id         int // identification
 	stopTime   int // minimum stopTime on station in minutes
 	repairTime int
 	Name       string
@@ -278,7 +268,7 @@ type StationTrack struct {
 // Turntable represents Track interface implementation to rotate Train and move from one track to another.
 // Turntable is a node connecting edges in railroad representation.
 type Turntable struct {
-	id         int // identificator
+	id         int // identification
 	turnTime   int // minimum stopTime needed to rotate the train
 	repairTime int
 	Rider      chan *Train
@@ -427,27 +417,11 @@ func (tt *Turntable) Reserve() bool {
 	}
 }
 
-func (nt *NormalTrack) Do() {
-	nt.Done <- true
-}
-func (st *StationTrack) Do() {
-	st.Done <- true
-}
-func (tt *Turntable) Do() {
-	tt.Done <- true
-}
+func (nt *NormalTrack) Cancel()  { nt.Cancelled <- true }
+func (st *StationTrack) Cancel() { st.Cancelled <- true }
+func (tt *Turntable) Cancel()    { tt.Cancelled <- true }
 
-func (nt *NormalTrack) Cancel() {
-	nt.Cancelled <- true
-}
-func (st *StationTrack) Cancel() {
-	st.Cancelled <- true
-}
-func (tt *Turntable) Cancel() {
-	tt.Cancelled <- true
-}
-
-func (nt *NormalTrack) IsAvailable() bool {
+func (nt *NormalTrack) isAvailable() bool {
 	select {
 	case <-nt.Available:
 		return true
@@ -455,7 +429,7 @@ func (nt *NormalTrack) IsAvailable() bool {
 		return false
 	}
 }
-func (st *StationTrack) IsAvailable() bool {
+func (st *StationTrack) isAvailable() bool {
 	select {
 	case <-st.Available:
 		return true
@@ -463,7 +437,7 @@ func (st *StationTrack) IsAvailable() bool {
 		return false
 	}
 }
-func (tt *Turntable) IsAvailable() bool {
+func (tt *Turntable) isAvailable() bool {
 	select {
 	case <-tt.Available:
 		return true
