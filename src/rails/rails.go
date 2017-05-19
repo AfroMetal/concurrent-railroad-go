@@ -202,6 +202,27 @@ func (rt *RepairTeam) GoString() string {
 		rt.id, rt.speed, rt.station.id)
 }
 
+func SearchForPath(currentPath Path, from Track, destination Neighbors, resp chan Path, graph ConnectionsGraph) {
+	for _, track := range from.Neighbors(graph) {
+		switch track.IsAvailable() {
+		case true:
+			for _, d := range destination {
+				if track == d {
+					select {
+					case resp <- append(currentPath, track):
+						return
+					default:
+						continue
+					}
+				}
+			}
+			SearchForPath(append(currentPath, track), track, destination, resp, graph)
+		default:
+			continue
+		}
+	}
+}
+
 // Track is an interface for NormalTrack, StationTrack, Turntable that enables
 // basic operations on them without knowing precise type
 type Track interface {
@@ -210,6 +231,8 @@ type Track interface {
 	Reserve() bool
 	Do()
 	Cancel()
+	IsAvailable() bool
+	Neighbors(connections ConnectionsGraph) (ns Neighbors)
 	String() string
 	GoString() string
 }
@@ -422,6 +445,31 @@ func (st *StationTrack) Cancel() {
 }
 func (tt *Turntable) Cancel() {
 	tt.Cancelled <- true
+}
+
+func (nt *NormalTrack) IsAvailable() bool {
+	select {
+	case <-nt.Available:
+		return true
+	default:
+		return false
+	}
+}
+func (st *StationTrack) IsAvailable() bool {
+	select {
+	case <-st.Available:
+		return true
+	default:
+		return false
+	}
+}
+func (tt *Turntable) IsAvailable() bool {
+	select {
+	case <-tt.Available:
+		return true
+	default:
+		return false
+	}
 }
 
 func (nt *NormalTrack) Siblings(connections ConnectionsGraph) []Track {
