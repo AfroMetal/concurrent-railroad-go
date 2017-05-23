@@ -29,190 +29,6 @@ func NewConnectionsGraph(n int) (connections ConnectionsGraph) {
 type Turntables []*Turntable
 type NormalTracks []*NormalTrack
 type StationTracks []*StationTrack
-type Trains []*Train
-type RepairTeams []*RepairTeam
-
-// Train stores all parameters for train instance needed for its simulation.
-// Only exported field is Name, all operations concerning Train type are done
-// by appropriate functions.
-// A Train must be created using NewTrain.
-type Train struct {
-	id         int // Train's identification
-	speed      int // maximum speed in km/h
-	capacity   int // how many people can board the train
-	repairTime int
-	Name       string // Train's name for pretty printing
-	route      Route  // cycle on railroad represented by Turntables
-	index      int    // current position on route (last visited Turntable)
-	at         Track  // current position, Track the train occupies
-	Done       chan bool
-	Repaired   chan bool
-	Broke      chan *Train
-}
-
-// NewTrain creates pointer to new Train type instance.
-// First Turntable on route is automatically locked without checking if it is free first.
-// Every Train instance should be created using NewTrain.
-func NewTrain(id, speed, cap, repTime int, name string, route Route) (train *Train) {
-	train = &Train{
-		id:         id,
-		speed:      speed,
-		capacity:   cap,
-		repairTime: repTime,
-		Name:       strings.Title(name),
-		route:      route,
-		index:      0,
-		at:         route[0],
-		Done:       make(chan bool),
-		Repaired:   make(chan bool),
-		Broke:      make(chan *Train, 1)}
-	return
-}
-
-// At returns value of tt'st un-exported field at.
-func (t *Train) At() Track { return t.at }
-
-func (t *Train) ID() int { return t.id }
-
-func (t *Train) Speed() int { return t.speed }
-
-// Connection returns pair of pointers to Turntables in tt'st route from current at.
-func (t *Train) Connection() (from, to *Turntable) {
-	return t.route[t.index], t.route[(t.index+1)%len(t.route)]
-}
-
-// MoveTo unlocks tt'st old position, moving it to Track to, when it is Turntable also
-// increments index of tt'st route.
-// Returns stopTime tt will have to spend on new position.
-// MoveTo should be used after after successful lock on next position.
-func (t *Train) SetAt(at Track) { t.at = at }
-
-func (t *Train) NextPosition() { t.index = (t.index + 1) % len(t.route) }
-
-// String returns human-friendly label for Train t
-func (t *Train) String() string { return fmt.Sprintf("Train%d %s", t.id, strings.ToUpper(t.Name)) }
-
-// GoString returns more verbose human-friendly representation of Train t
-func (t *Train) GoString() string {
-	return fmt.Sprintf(
-		"rails.Train:%s:%d{speed:%d, cap:%d, RepairTime:%d, route:%s, at:%s}",
-		t.Name, t.id, t.speed, t.capacity, t.repairTime, t.route, t.at)
-}
-
-// Route is a slice of Turntable pointers that represents cycle in railroad.
-type Route Turntables
-
-func (r Route) String() string {
-	ids := make([]string, len(r))
-	for i, tt := range r {
-		ids[i] = strconv.Itoa(tt.id)
-	}
-	return "[" + strings.Join(ids, " ") + "]"
-}
-
-// GoString prints all Route's content as GoString
-func (r Route) GoString() string {
-	ids := make([]string, len(r))
-	for i, tt := range r {
-		ids[i] = tt.GoString()
-	}
-	return "rails.Route{" + strings.Join(ids, ", ") + "}"
-}
-
-type Neighbors []Track
-type Path []Track
-
-type BrokenFella interface {
-	RepairTime() float64
-	Repair()
-	Neighbors(connections ConnectionsGraph) (ns Neighbors)
-}
-
-func (t *Train) RepairTime() float64         { return float64(t.repairTime) / 60.0 }
-func (tt *Turntable) RepairTime() float64    { return float64(tt.repairTime) / 60.0 }
-func (nt *NormalTrack) RepairTime() float64  { return float64(nt.repairTime) / 60.0 }
-func (st *StationTrack) RepairTime() float64 { return float64(st.repairTime) / 60.0 }
-
-func (t *Train) Repair()         { t.Repaired <- true }
-func (tt *Turntable) Repair()    { tt.Repaired <- true }
-func (nt *NormalTrack) Repair()  { nt.Repaired <- true }
-func (st *StationTrack) Repair() { st.Repaired <- true }
-
-func (t *Train) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
-	pos := t.at
-	return pos.(BrokenFella).Neighbors(connections)
-}
-func (tt *Turntable) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
-	i := tt.id
-	for j := range connections[i] {
-		for _, track := range connections[i][j] {
-			ns = append(ns, track)
-		}
-	}
-	return
-}
-func (nt *NormalTrack) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
-	ns = Neighbors{nt.first, nt.second}
-	return
-}
-func (st *StationTrack) Neighbors(connections ConnectionsGraph) (ns Neighbors) {
-	ns = Neighbors{st.first, st.second}
-	return
-}
-
-type RepairTeam struct {
-	id      int // Train's identification
-	speed   int // maximum speed in km/h
-	station *StationTrack
-	at      Track // current position, Track the repair team occupies
-	Done    chan bool
-}
-
-func NewRepairTeam(id, speed int, station *StationTrack) (team *RepairTeam) {
-	team = &RepairTeam{
-		id:      id,
-		speed:   speed,
-		station: station,
-		at:      station,
-		Done:    make(chan bool)}
-	return
-}
-
-func (rt *RepairTeam) Station() *StationTrack { return rt.station }
-func (rt *RepairTeam) Speed() int             { return rt.speed }
-func (rt *RepairTeam) At() Track              { return rt.at }
-func (rt *RepairTeam) SetAt(at Track)         { rt.at = at }
-
-// String returns human-friendly label for Train t
-func (rt *RepairTeam) String() string { return fmt.Sprintf("RepairTeam%d", rt.id) }
-
-// GoString returns more verbose human-friendly representation of Train t
-func (rt *RepairTeam) GoString() string {
-	return fmt.Sprintf(
-		"rails.RepairTeam:%d{speed:%d, station:%s, at:%s}",
-		rt.id, rt.speed, rt.station, rt.at)
-}
-
-func SearchForPath(currentPath Path, from Track, destination Neighbors, resp chan Path, graph ConnectionsGraph) {
-	for _, track := range from.Neighbors(graph) {
-		switch track.isAvailable() {
-		case true:
-			for _, d := range destination {
-				if track == d {
-					select {
-					case resp <- append(currentPath, track):
-						return
-					default:
-						continue
-					}
-				}
-			}
-			SearchForPath(append(currentPath, track), track, destination, resp, graph)
-		default:
-			continue
-		}
-	}
-}
 
 // Track is an interface for NormalTrack, StationTrack, Turntable that enables
 // basic operations on them without knowing precise type
@@ -255,6 +71,7 @@ type StationTrack struct {
 	Name       string
 	first      *Turntable
 	second     *Turntable
+	station    *Station
 	Rider      chan *Train
 	TeamRider  chan *RepairTeam
 	Done       chan bool
@@ -481,4 +298,11 @@ func (tt *Turntable) GoString() string {
 	return fmt.Sprintf(
 		"rails.Turntable:%d{stopTime:%d, RepairTime:%d}",
 		tt.id, tt.turnTime, tt.repairTime)
+}
+
+func (st *StationTrack) BelongsTo(s *Station) bool {
+	return st.first == s.first && st.second == s.second
+}
+func (st *StationTrack) SetStation(s *Station) {
+	st.station = s
 }
