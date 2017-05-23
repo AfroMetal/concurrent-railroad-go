@@ -74,6 +74,8 @@ var normalTracks rails.NormalTracks
 var stationTracks rails.StationTracks
 var trains rails.Trains
 var repairTeams rails.RepairTeams
+var stations rails.Stations
+var workers rails.Workers
 
 var verbose = flag.Bool("verbose", false, "print state changes in real time")
 var generateDotFile = flag.Bool("dot", false, "generate Graphviz .dot file of railroad")
@@ -379,6 +381,21 @@ func main() {
 		}(stationTracks[i])
 	}
 
+	stations = make(rails.Stations, 0)
+CreateStations:
+	for _, st := range stationTracks {
+		for _, station := range stations {
+			if st.BelongsTo(station) {
+				station.StationTracks = append(station.StationTracks, st)
+				st.SetStation(station)
+				continue CreateStations
+			}
+		}
+		station := rails.NewStation(len(stations), st)
+		stations = append(stations, station)
+		st.SetStation(station)
+	}
+
 	// DOT FILE
 	if *generateDotFile {
 		out, err := os.Create(*outFilename + ".dot")
@@ -599,7 +616,19 @@ func main() {
 			route = append(route, turntables[index])
 		}
 
-		trains[i] = rails.NewTrain(id, speed, capacity, repTime, name, route)
+		connections := make(rails.Stations, 0)
+		prev := route[len(route)-1]
+		for i := 0; i < len(route)-1; i++ {
+			next := route[i]
+			for _, s := range stations {
+				if s.Connects(prev, next) {
+					connections = append(connections, s)
+				}
+			}
+			prev = next
+		}
+
+		trains[i] = rails.NewTrain(id, speed, capacity, repTime, name, route, connections)
 	}
 
 	waitGroup := new(sync.WaitGroup)
@@ -621,7 +650,7 @@ func main() {
 				"\t'r' - list repair teams,\n" +
 				"\t'u' - list turntables,\n" +
 				"\t'n' - list normal tracks,\n" +
-				"\t's' - list station tracks,\n" +
+				"\t's' - list stations with station tracks,\n" +
 				"\t'h' - print this menu again,\n" +
 				"\t'v' - enter verbose mode (YOU WILL NOT BE ABLE TO TURN IT OFF),\n" +
 				"\t'q' - to quit simulation.\n"
@@ -644,23 +673,26 @@ func main() {
 					}
 				case 'T': // trains
 					for _, t := range trains {
-						fmt.Printf("%#v\n", t)
+						fmt.Printf("%v, position: %v\n", t, t.At())
 					}
 				case 'R': // repair teams
 					for _, rt := range repairTeams {
-						fmt.Printf("%#v\n", rt)
+						fmt.Printf("%v, position: %v\n", rt, rt.At())
 					}
 				case 'U': // turntables
 					for _, tt := range turntables {
-						fmt.Printf("%#v\n", tt)
+						fmt.Printf("%v\n", tt)
 					}
 				case 'N': // normal tracks
 					for _, nt := range normalTracks {
-						fmt.Printf("%#v\n", nt)
+						fmt.Printf("%v\n", nt)
 					}
-				case 'S': // station tracks
-					for _, st := range stationTracks {
-						fmt.Printf("%#v\n", st)
+				case 'S': // stations
+					for _, s := range stations {
+						fmt.Printf("%v:\n", s)
+						for _, st := range s.StationTracks {
+							fmt.Printf("\t%v\n", st)
+						}
 					}
 				case 'H': // help
 					fmt.Print(instructions)
