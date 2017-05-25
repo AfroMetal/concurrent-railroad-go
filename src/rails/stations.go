@@ -27,6 +27,8 @@ func NewStation(id int, initial *StationTrack) (station *Station) {
 	return
 }
 
+func (s *Station) ID() int { return s.id }
+
 func (s *Station) Connects(first, second *Turntable) bool {
 	return (s.first == first && s.second == second) || (s.first == second && s.second == first)
 }
