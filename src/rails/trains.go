@@ -26,7 +26,6 @@ type Train struct {
 	index      int    // current position on route (last visited Turntable)
 	at         Track  // current position, Track the train occupies
 	connects   Stations
-	passengers Workers
 	Seats      chan bool
 	Done       chan bool
 	Repaired   chan bool
@@ -47,7 +46,6 @@ func NewTrain(id, speed, cap, repTime int, name string, route Route, connections
 		index:      0,
 		at:         route[0],
 		connects:   connections,
-		passengers: make(Workers, cap),
 		Seats:      make(chan bool, cap),
 		Done:       make(chan bool),
 		Repaired:   make(chan bool),
