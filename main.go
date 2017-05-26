@@ -359,6 +359,9 @@ func main() {
 					t.SetAt(self)
 					log.Printf("%s %v waits on %v",
 						clockTime(), t, self)
+
+					t.ArrivedAtStation(self.Station())
+
 					self.Sleep(t.Speed(), secondsPerHour)
 
 					self.Done <- true
@@ -381,6 +384,7 @@ func main() {
 		}(stationTracks[i])
 	}
 
+	// STATIONS
 	stations = make(rails.Stations, 0)
 CreateStations:
 	for _, st := range stationTracks {
@@ -616,19 +620,23 @@ CreateStations:
 			route = append(route, turntables[index])
 		}
 
-		connections := make(rails.Stations, 0)
+		train := rails.NewTrain(id, speed, capacity, repTime, name, route)
+
 		prev := route[len(route)-1]
 		for i := 0; i < len(route)-1; i++ {
 			next := route[i]
 			for _, s := range stations {
 				if s.Connects(prev, next) {
-					connections = append(connections, s)
+					train.Connects = append(train.Connects, s)
+					s.Trains = append(s.Trains, train)
+					tickets := make(rails.Tickets, 0)
+					s.TicketsFor[train] = &tickets
 				}
 			}
 			prev = next
 		}
 
-		trains[i] = rails.NewTrain(id, speed, capacity, repTime, name, route, connections)
+		trains[i] = train
 	}
 
 	waitGroup := new(sync.WaitGroup)

@@ -10,8 +10,9 @@ type Station struct {
 	Name          string
 	first         *Turntable
 	second        *Turntable
+	Trains        Trains
 	StationTracks StationTracks
-	Workers       Workers
+	TicketsFor    map[*Train]*Tickets
 	Destinations  Stations
 }
 
@@ -21,10 +22,10 @@ func NewStation(id int, initial *StationTrack) (station *Station) {
 		Name:          initial.Name,
 		first:         initial.first,
 		second:        initial.second,
+		Trains:        make(Trains, 0),
 		StationTracks: StationTracks{initial},
-		Workers:       make(Workers, 0),
+		TicketsFor:    make(map[*Train]*Tickets, 0),
 		Destinations:  make(Stations, 0)}
-	return
 }
 
 func (s *Station) ID() int { return s.id }

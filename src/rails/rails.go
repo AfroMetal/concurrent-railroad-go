@@ -306,3 +306,4 @@ func (st *StationTrack) BelongsTo(s *Station) bool {
 func (st *StationTrack) SetStation(s *Station) {
 	st.station = s
 }
+func (st *StationTrack) Station() *Station { return st.station }

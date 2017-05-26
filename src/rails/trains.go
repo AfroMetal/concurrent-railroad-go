@@ -17,40 +17,76 @@ type Route Turntables
 // by appropriate functions.
 // A Train must be created using NewTrain.
 type Train struct {
-	id         int // Train's identification
-	speed      int // maximum speed in km/h
-	capacity   int // how many people can board the train
-	repairTime int
-	Name       string // Train's name for pretty printing
-	route      Route  // cycle on railroad represented by Turntables
-	index      int    // current position on route (last visited Turntable)
-	at         Track  // current position, Track the train occupies
-	connects   Stations
-	Seats      chan bool
-	Done       chan bool
-	Repaired   chan bool
-	Broke      chan *Train
+	id           int // Train's identification
+	speed        int // maximum speed in km/h
+	capacity     int // how many people can board the train
+	repairTime   int
+	Name         string // Train's name for pretty printing
+	route        Route  // cycle on railroad represented by Turntables
+	index        int    // current position on route (last visited Turntable)
+	at           Track  // current position, Track the train occupies
+	Connects     Stations
+	validTickets Tickets
+	Seats        chan bool
+	Done         chan bool
+	Repaired     chan bool
+	Broke        chan *Train
 }
 
 // NewTrain creates pointer to new Train type instance.
 // First Turntable on route is automatically locked without checking if it is free first.
 // Every Train instance should be created using NewTrain.
-func NewTrain(id, speed, cap, repTime int, name string, route Route, connections Stations) (train *Train) {
+func NewTrain(id, speed, cap, repTime int, name string, route Route) (train *Train) {
 	train = &Train{
-		id:         id,
-		speed:      speed,
-		capacity:   cap,
-		repairTime: repTime,
-		Name:       strings.Title(name),
-		route:      route,
-		index:      0,
-		at:         route[0],
-		connects:   connections,
-		Seats:      make(chan bool, cap),
-		Done:       make(chan bool),
-		Repaired:   make(chan bool),
-		Broke:      make(chan *Train, 1)}
+		id:           id,
+		speed:        speed,
+		capacity:     cap,
+		repairTime:   repTime,
+		Name:         strings.Title(name),
+		route:        route,
+		index:        0,
+		at:           route[0],
+		Connects:     make(Stations, 0),
+		validTickets: make(Tickets, 0),
+		Seats:        make(chan bool, cap),
+		Done:         make(chan bool),
+		Repaired:     make(chan bool),
+		Broke:        make(chan *Train, 1)}
 	return
+}
+
+func (t *Train) ArrivedAtStation(station *Station) {
+	t.letPassengersOut(station)
+
+	t.validateTickets(station)
+}
+
+func (t *Train) letPassengersOut(station *Station) {
+	for i, ticket := range t.validTickets {
+		if ticket.destination == station {
+			t.validTickets = append(t.validTickets[:i], t.validTickets[i+1:]...)
+			t.ticketUsed(ticket)
+		}
+	}
+}
+
+func (t *Train) validateTickets(station *Station) {
+	tickets := station.TicketsFor[t]
+	for i, ticket := range *tickets {
+		select {
+		case t.Seats <- true:
+			*tickets = append((*tickets)[:i], (*tickets)[i+1:]...)
+			t.validTickets = append(t.validTickets, ticket)
+		default:
+			return
+		}
+	}
+}
+
+func (t *Train) ticketUsed(ticket *Ticket) {
+	<-t.Seats
+	ticket.owner.in = nil
+	ticket.owner.Done <- true
 }
 
 // At returns value of tt'st un-exported field at.
@@ -79,8 +115,8 @@ func (t *Train) String() string { return fmt.Sprintf("Train%d %s", t.id, strings
 // GoString returns more verbose human-friendly representation of Train t
 func (t *Train) GoString() string {
 	return fmt.Sprintf(
-		"rails.Train:%s:%d{speed:%d, cap:%d, RepairTime:%d, route:%s, at:%s, connects:%s}",
-		t.Name, t.id, t.speed, t.capacity, t.repairTime, t.route, t.at, t.connects)
+		"rails.Train:%s:%d{speed:%d, cap:%d, RepairTime:%d, route:%s, at:%s, Connects:%s}",
+		t.Name, t.id, t.speed, t.capacity, t.repairTime, t.route, t.at, t.Connects)
 }
 
 func (r Route) String() string {
