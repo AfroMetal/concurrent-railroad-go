@@ -110,7 +110,7 @@ func (t *Train) Simulate(railway *RailwayData, data *SimulationData, wg *sync.Wa
 			t.NextPosition()
 			<-snd.Done
 
-			if rand.Float64() < 0.005 {
+			if rand.Float64() < 0.02 {
 				t.Broke <- t
 			}
 		}

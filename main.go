@@ -31,14 +31,19 @@ var logger *log.Logger
 var railway *rails.RailwayData = &rails.RailwayData{RepairChannel: make(chan rails.BrokenFella)}
 var data *rails.SimulationData = &rails.SimulationData{StatisticsChannel: &statisticsChannel}
 
-var verbose = flag.Bool("verbose", false, "print state changes in real time")
-var generateDotFile = flag.Bool("dot", false, "generate Graphviz .dot file of railroad")
-var inFilename = flag.String("in", "input", "input file containing railroad description")
-var outFilename = flag.String("out", "output", "output file for statistics saving, will be overwritten")
+var verbose = flag.Bool("v", false, "print state changes in real time")
+var generateDotFile = flag.Bool("d", false, "generate Graphviz .dot file of railroad")
+var inFilename = flag.String("i", "input", "input file containing railroad description")
+var outFilename = flag.String("o", "output", "output file for statistics saving, will be overwritten")
+var simulateRepairs = flag.Bool("r", false, "simulate breakage and repair using RepairTeams")
+var simulateWorkers = flag.Bool("w", false, "simulate Workers and jobs dispatcher")
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	flag.Parse()
+
+	data.SimulateRepairs = *simulateRepairs
+	data.SimulateWorkers = *simulateWorkers
 
 	out, err := os.Create(*outFilename)
 	check(err)
@@ -151,8 +156,12 @@ func main() {
 						}
 					}
 				case 'R': // repair teams
-					for _, rt := range railway.RepairTeams {
-						fmt.Printf("%v, position: %v\n", rt, rt.At())
+					if data.SimulateRepairs {
+						for _, rt := range railway.RepairTeams {
+							fmt.Printf("%v, position: %v\n", rt, rt.At())
+						}
+					} else {
+						fmt.Println("Repair simulation is OFF")
 					}
 				case 'U': // turntables
 					for _, tt := range railway.Turntables {
@@ -170,18 +179,22 @@ func main() {
 						}
 					}
 				case 'W': // workers
-					for _, w := range railway.Workers {
-						var position string
-						if w.In != nil {
-							position = fmt.Sprintf("travels by %v", w.In)
-						} else if w.At != nil {
-							if w.At == w.Home && w.Job.Workplace == nil {
-								position = "is resting at home"
-							} else {
-								position = fmt.Sprintf("waits at %v", w.At)
+					if data.SimulateWorkers {
+						for _, w := range railway.Workers {
+							var position string
+							if w.In != nil {
+								position = fmt.Sprintf("travels by %v", w.In)
+							} else if w.At != nil {
+								if w.At == w.Home && w.Job.Workplace == nil {
+									position = "is resting at home"
+								} else {
+									position = fmt.Sprintf("waits at %v", w.At)
+								}
 							}
+							fmt.Printf("%v %s\n", w, position)
 						}
-						fmt.Printf("%v %s\n", w, position)
+					} else {
+						fmt.Println("Workers simulation is OFF")
 					}
 				case 'H': // help
 					fmt.Print(instructions)
@@ -200,17 +213,6 @@ func main() {
 	}
 
 	rails.Simulate(railway, data, logger, waitGroup)
-
-	go func() {
-		subset := railway.Workers.Subset(3)
-		workplace := railway.Stations[10]
-		workTime := 30
-		job := rails.NewJob(workTime, workplace, subset)
-		time.Sleep(3 * time.Second)
-		for _, w := range subset {
-			w.Work <- job
-		}
-	}()
 
 	waitGroup.Wait()
 }

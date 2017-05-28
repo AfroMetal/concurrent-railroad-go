@@ -8,6 +8,16 @@ import (
 )
 
 type WorkerSlice []*Worker
+
+func (ws WorkerSlice) available() bool {
+	for _, w := range ws {
+		if w.At != w.Home || w.Job != nil {
+			return false
+		}
+	}
+	return true
+}
+
 type Job struct {
 	duration     int
 	Workplace    *Station
@@ -62,45 +72,58 @@ func NewWorker(id int, home *Station) (worker *Worker) {
 
 func (w *Worker) Simulate(railway *RailwayData, data *SimulationData) {
 	for {
+	WaitForWork:
 		w.Job = <-w.Work
 		logger.Printf("%s %v goes to work at %v for %dm",
 			ClockTime(data), w, w.Job.Workplace, w.Job.duration)
 
-		depT := w.Home.Trains
-		arrT := w.Job.Workplace.Trains
+		if w.Job.Workplace == w.Home {
+			w.work(data)
+			logger.Printf("%s %v returned from work",
+				ClockTime(data), w)
+			goto WaitForWork
+		} else {
+			depT := w.Home.Trains
+			arrT := w.Job.Workplace.Trains
 
-		for _, dt := range depT {
-			for _, at := range arrT {
-				if dt == at {
-					w.travel(at, w.Home, w.Job.Workplace)
-					w.work(data)
-					w.travel(at, w.At, w.Home)
-					return
+			for _, dt := range depT {
+				for _, at := range arrT {
+					if dt == at {
+						w.travel(at, w.Home, w.Job.Workplace)
+						w.work(data)
+						w.travel(at, w.At, w.Home)
+
+						logger.Printf("%s %v returned from work",
+							ClockTime(data), w)
+
+						goto WaitForWork
+					}
 				}
 			}
-		}
 
-		// no direct connection, look for change
+			// no direct connection, look for change
 
-		for _, dt := range depT {
-			for _, sd := range dt.Connects {
-				for _, at := range arrT {
-					for _, sa := range at.Connects {
-						if sd == sa {
-							w.travel(dt, w.Home, sd)
-							w.travel(at, sd, w.Job.Workplace)
-							w.work(data)
-							w.travel(at, w.At, sa)
-							w.travel(dt, sa, w.Home)
-							return
+			for _, dt := range depT {
+				for _, sd := range dt.Connects {
+					for _, at := range arrT {
+						for _, sa := range at.Connects {
+							if sd == sa {
+								w.travel(dt, w.Home, sd)
+								w.travel(at, sd, w.Job.Workplace)
+								w.work(data)
+								w.travel(at, w.At, sa)
+								w.travel(dt, sa, w.Home)
+
+								logger.Printf("%s %v returned from work",
+									ClockTime(data), w)
+
+								goto WaitForWork
+							}
 						}
 					}
 				}
 			}
 		}
-
-		logger.Printf("%s %v returned from work",
-			ClockTime(data), w)
 	}
 }
 

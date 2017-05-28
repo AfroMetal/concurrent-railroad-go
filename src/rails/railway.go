@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,8 @@ type SimulationData struct {
 	clock             struct{ h, m int } // simulation clock start hours and minutes
 	Start             time.Time          // simulation start time for calculating simulation clock
 	StatisticsChannel *chan string
+	SimulateRepairs   bool
+	SimulateWorkers   bool
 }
 
 func (d *SimulationData) Parse(scan *bufio.Scanner) {
@@ -314,16 +317,37 @@ func Simulate(railway *RailwayData, data *SimulationData, log *log.Logger, wg *s
 		go st.Simulate(railway, data)
 	}
 	// REPAIR TEAMS
-	//for _, rt := range railway.RepairTeams {
-	//	go rt.Simulate(railway, data)
-	//}
+	if data.SimulateRepairs {
+		for _, rt := range railway.RepairTeams {
+			go rt.Simulate(railway, data)
+		}
+	}
 	// TRAINS
 	for _, t := range railway.Trains {
 		go t.Simulate(railway, data, wg)
 	}
-	// WORKERS
-	for _, w := range railway.Workers {
-		go w.Simulate(railway, data)
+	if data.SimulateWorkers {
+		// WORKERS
+		for _, w := range railway.Workers {
+			go w.Simulate(railway, data)
+		}
+		// DISPATCHER
+		go func() {
+			for {
+				time.Sleep(time.Duration(data.SecondsPerHour*(3+rand.Intn(3))) * time.Second)
+
+				n := len(railway.Workers)/4 + rand.Intn(len(railway.Workers)/4)
+				subset := railway.Workers.Subset(n)
+				if subset.available() {
+					workplace := railway.Stations[rand.Intn(len(railway.Stations)-railway.rts)] // avoid working at depots
+					workTime := 30 + rand.Intn(60)
+					job := NewJob(workTime, workplace, subset)
+					for _, w := range subset {
+						w.Work <- job
+					}
+				}
+			}
+		}()
 	}
 }
 

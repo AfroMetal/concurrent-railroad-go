@@ -200,7 +200,7 @@ func (nt *NormalTrack) Simulate(railway *RailwayData, data *SimulationData) {
 
 			nt.Done <- true
 			<-t.Done
-			if rand.Float64() < 0.05 {
+			if rand.Float64() < 0.02 {
 				nt.Broke <- nt
 			}
 		case rt := <-nt.TeamRider:
@@ -321,7 +321,7 @@ func (tt *Turntable) Simulate(railway *RailwayData, data *SimulationData) {
 
 			tt.Done <- true
 			<-t.Done
-			if rand.Float64() < 0.08 {
+			if rand.Float64() < 0.01 {
 				tt.Broke <- tt
 			}
 		case rt := <-tt.TeamRider:
