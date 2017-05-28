@@ -314,12 +314,16 @@ func Simulate(railway *RailwayData, data *SimulationData, log *log.Logger, wg *s
 		go st.Simulate(railway, data)
 	}
 	// REPAIR TEAMS
-	for _, rt := range railway.RepairTeams {
-		go rt.Simulate(railway, data)
-	}
+	//for _, rt := range railway.RepairTeams {
+	//	go rt.Simulate(railway, data)
+	//}
 	// TRAINS
 	for _, t := range railway.Trains {
 		go t.Simulate(railway, data, wg)
+	}
+	// WORKERS
+	for _, w := range railway.Workers {
+		go w.Simulate(railway, data)
 	}
 }
 

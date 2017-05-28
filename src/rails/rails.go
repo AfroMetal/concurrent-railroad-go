@@ -254,7 +254,8 @@ func (st *StationTrack) Simulate(railway *RailwayData, data *SimulationData) {
 			logger.Printf("%s %v waits on %v",
 				ClockTime(data), t, st)
 
-			t.ArrivedAtStation(st.Station())
+			t.letPassengersOut(st.station, data)
+			t.validateTickets(st.station)
 
 			st.Sleep(t.Speed(), data.SecondsPerHour)
 

@@ -175,7 +175,7 @@ func main() {
 						if w.In != nil {
 							position = fmt.Sprintf("travels by %v", w.In)
 						} else if w.At != nil {
-							if w.At == w.Home && w.Workplace == nil {
+							if w.At == w.Home && w.Job.Workplace == nil {
 								position = "is resting at home"
 							} else {
 								position = fmt.Sprintf("waits at %v", w.At)
@@ -205,15 +205,10 @@ func main() {
 		subset := railway.Workers.Subset(3)
 		workplace := railway.Stations[10]
 		workTime := 30
-		time.Sleep(10 * time.Second)
+		job := rails.NewJob(workTime, workplace, subset)
+		time.Sleep(3 * time.Second)
 		for _, w := range subset {
-			go func(worker *rails.Worker) {
-				logger.Printf("%s %v goes to work at %v for %dm",
-					rails.ClockTime(data), worker, workplace, workTime)
-				worker.GoToWork(workplace, workTime, data.SecondsPerHour)
-				logger.Printf("%s %v returned from work",
-					rails.ClockTime(data), worker)
-			}(w)
+			w.Work <- job
 		}
 	}()
 

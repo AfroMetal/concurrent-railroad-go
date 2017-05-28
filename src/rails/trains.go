@@ -117,13 +117,7 @@ func (t *Train) Simulate(railway *RailwayData, data *SimulationData, wg *sync.Wa
 	}
 }
 
-func (t *Train) ArrivedAtStation(station *Station) {
-	t.letPassengersOut(station)
-
-	t.validateTickets(station)
-}
-
-func (t *Train) letPassengersOut(station *Station) {
+func (t *Train) letPassengersOut(station *Station, data *SimulationData) {
 	left := 0
 	for i := range t.validTickets {
 		j := i - left
@@ -136,6 +130,7 @@ func (t *Train) letPassengersOut(station *Station) {
 				ticket.owner, t, station)
 			ticket.owner.In = nil
 			ticket.owner.At = station
+
 			ticket.owner.Done <- true
 		}
 	}
