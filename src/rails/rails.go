@@ -8,6 +8,7 @@ package rails
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -26,9 +27,9 @@ func NewConnectionsGraph(n int) (connections ConnectionsGraph) {
 	return
 }
 
-type Turntables []*Turntable
-type NormalTracks []*NormalTrack
-type StationTracks []*StationTrack
+type TurntableSlice []*Turntable
+type NormalTrackSlice []*NormalTrack
+type StationTrackSlice []*StationTrack
 
 // Track is an interface for NormalTrack, StationTrack, Turntable that enables
 // basic operations on them without knowing precise type
@@ -39,11 +40,12 @@ type Track interface {
 	Cancel()
 	isAvailable() bool
 	Neighbors(connections ConnectionsGraph) (ns Neighbors)
+	Simulate(railway *RailwayData, data *SimulationData)
 	String() string
 	GoString() string
 }
 
-// NormalTrack represents Track interface implementation that is used to pass distance between two Turntables.
+// NormalTrack represents Track interface implementation that is used to pass distance between two TurntableSlice.
 // It is an edge in railroad representation.
 type NormalTrack struct {
 	id         int // identification
@@ -62,7 +64,7 @@ type NormalTrack struct {
 	Broke      chan *NormalTrack
 }
 
-// StationTrack represents Track interface implementation to stationed Trains.
+// StationTrack represents Track interface implementation to stationed TrainSlice.
 // It is an edge in railroad representation.
 type StationTrack struct {
 	id         int // identification
@@ -159,6 +161,180 @@ func NewTurntable(id, time, repTime int) (tt *Turntable) {
 		Repaired:   make(chan bool),
 		Broke:      make(chan *Turntable, 1)}
 	return
+}
+
+func (nt *NormalTrack) Simulate(railway *RailwayData, data *SimulationData) {
+	for {
+		select {
+		case <-nt.Broke:
+			select {
+			case railway.RepairChannel <- nt:
+				logger.Printf("%s %v broke", ClockTime(data), nt)
+				<-nt.Repaired
+				logger.Printf("%s %v repaired", ClockTime(data), nt)
+			default:
+				continue
+			}
+		case <-nt.Reserved:
+			select {
+			case <-nt.Cancelled:
+				continue
+			case rt := <-nt.TeamRider:
+				rt.Done <- true
+
+				rt.SetAt(nt)
+				logger.Printf("%s %v travels along reserved %v",
+					ClockTime(data), rt, nt)
+				nt.Sleep(rt.Speed(), data.SecondsPerHour)
+
+				nt.Done <- true
+				<-rt.Done
+			}
+		case t := <-nt.Rider:
+			t.Done <- true
+
+			t.SetAt(nt)
+			logger.Printf("%s %v travels along %v",
+				ClockTime(data), t, nt)
+			nt.Sleep(t.Speed(), data.SecondsPerHour)
+
+			nt.Done <- true
+			<-t.Done
+			if rand.Float64() < 0.05 {
+				nt.Broke <- nt
+			}
+		case rt := <-nt.TeamRider:
+			rt.Done <- true
+
+			rt.SetAt(nt)
+			logger.Printf("%s %v travels along %v",
+				ClockTime(data), rt, nt)
+			nt.Sleep(rt.Speed(), data.SecondsPerHour)
+
+			nt.Done <- true
+			<-rt.Done
+		}
+	}
+}
+
+func (st *StationTrack) Simulate(railway *RailwayData, data *SimulationData) {
+	for {
+		select {
+		case <-st.Broke:
+			select {
+			case railway.RepairChannel <- st:
+				logger.Printf("%s %v broke", ClockTime(data), st)
+				<-st.Repaired
+				logger.Printf("%s %v repaired", ClockTime(data), st)
+			default:
+				continue
+			}
+		case <-st.Reserved:
+			select {
+			case <-st.Cancelled:
+				continue
+			case rt := <-st.TeamRider:
+				rt.Done <- true
+
+				rt.SetAt(st)
+				logger.Printf("%s %v waits on reserved %v",
+					ClockTime(data), rt, st)
+				st.Sleep(rt.Speed(), data.SecondsPerHour)
+
+				st.Done <- true
+				<-rt.Done
+			}
+		case t := <-st.Rider:
+			t.Done <- true
+
+			*data.StatisticsChannel <- fmt.Sprintf("%v %s >-\t%v\n",
+				t, ClockTime(data), st)
+			// calculate real seconds to simulate action time
+			t.SetAt(st)
+			logger.Printf("%s %v waits on %v",
+				ClockTime(data), t, st)
+
+			t.ArrivedAtStation(st.Station())
+
+			st.Sleep(t.Speed(), data.SecondsPerHour)
+
+			st.Done <- true
+			<-t.Done
+			if rand.Float64() < 0.01 {
+				st.Broke <- st
+			}
+		case rt := <-st.TeamRider:
+			rt.Done <- true
+
+			rt.SetAt(st)
+			logger.Printf("%s %v waits on %v",
+				ClockTime(data), rt, st)
+			st.Sleep(rt.Speed(), data.SecondsPerHour)
+
+			st.Done <- true
+			<-rt.Done
+		}
+	}
+}
+
+func (tt *Turntable) Simulate(railway *RailwayData, data *SimulationData) {
+	for {
+		select {
+		case <-tt.Broke:
+			select {
+			case railway.RepairChannel <- tt:
+				logger.Printf("%s %v broke", ClockTime(data), tt)
+				<-tt.Repaired
+				logger.Printf("%s %v repaired", ClockTime(data), tt)
+			default:
+				continue
+			}
+		case <-tt.Reserved:
+			select {
+			case <-tt.Cancelled:
+				continue
+			case rt := <-tt.TeamRider:
+				rt.Done <- true
+
+				rt.SetAt(tt)
+				logger.Printf("%s %v rotates at reserved %v",
+					ClockTime(data), rt, tt)
+				tt.Sleep(rt.Speed(), data.SecondsPerHour)
+				tt.Done <- true
+				<-rt.Done
+			}
+		case t := <-tt.Rider:
+			t.Done <- true
+
+			switch t.At().(type) {
+			// if train left station save it to timetable
+			case *StationTrack:
+				*data.StatisticsChannel <- fmt.Sprintf("%v %s ->\t%v\n",
+					t, ClockTime(data), t.At())
+			}
+			// calculate real seconds to simulate action time
+			t.SetAt(tt)
+			logger.Printf("%s %v rotates at %v",
+				ClockTime(data), t, tt)
+			tt.Sleep(t.Speed(), data.SecondsPerHour)
+
+			tt.Done <- true
+			<-t.Done
+			if rand.Float64() < 0.08 {
+				tt.Broke <- tt
+			}
+		case rt := <-tt.TeamRider:
+			rt.Done <- true
+
+			rt.SetAt(tt)
+			logger.Printf("%s %v rotates at %v",
+				ClockTime(data), rt, tt)
+			tt.Sleep(rt.Speed(), data.SecondsPerHour)
+
+			tt.Done <- true
+			<-rt.Done
+		}
+	}
 }
 
 // ActionTime returns stopTime in simulation hours that traveling along NormalTrack will take.

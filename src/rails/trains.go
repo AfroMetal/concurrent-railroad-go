@@ -2,15 +2,17 @@ package rails
 
 import (
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 )
 
-type Trains []*Train
-type RepairTeams []*RepairTeam
+type TrainSlice []*Train
+type RepairTeamSlice []*RepairTeam
 
 // Route is a slice of Turntable pointers that represents cycle in railroad.
-type Route Turntables
+type Route TurntableSlice
 
 // Train stores all parameters for train instance needed for its simulation.
 // Only exported field is Name, all operations concerning Train type are done
@@ -22,10 +24,10 @@ type Train struct {
 	capacity     int // how many people can board the train
 	repairTime   int
 	Name         string // Train's name for pretty printing
-	route        Route  // cycle on railroad represented by Turntables
+	route        Route  // cycle on railroad represented by TurntableSlice
 	index        int    // current position on route (last visited Turntable)
 	at           Track  // current position, Track the train occupies
-	Connects     Stations
+	Connects     StationSlice
 	validTickets Tickets
 	Seats        chan bool
 	Done         chan bool
@@ -46,13 +48,73 @@ func NewTrain(id, speed, cap, repTime int, name string, route Route) (train *Tra
 		route:        route,
 		index:        0,
 		at:           route[0],
-		Connects:     make(Stations, 0),
+		Connects:     make(StationSlice, 0),
 		validTickets: make(Tickets, 0),
 		Seats:        make(chan bool, cap),
 		Done:         make(chan bool),
 		Repaired:     make(chan bool),
 		Broke:        make(chan *Train, 1)}
 	return
+}
+
+func (t *Train) Simulate(railway *RailwayData, data *SimulationData, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	logger.Printf("%s %v starts work", ClockTime(data), t)
+
+	track := t.At().(*Turntable)
+	track.Rider <- t
+	<-t.Done
+	<-track.Done
+
+	for {
+		select {
+		case <-t.Broke:
+			select {
+			case railway.RepairChannel <- t:
+				logger.Printf("%s %v broke", ClockTime(data), t)
+				<-t.Repaired
+				logger.Printf("%s %v repaired", ClockTime(data), t)
+			default:
+				continue
+			}
+		default:
+			// get nearest TurntableSlice
+			fst, snd := t.Connection()
+		Loop1: // search for available Track connecting `fst` and `snd`
+			for {
+				for _, r := range railway.Connections[fst.ID()][snd.ID()] {
+					switch r.(type) {
+					case *StationTrack:
+						r := r.(*StationTrack)
+						select {
+						case r.Rider <- t:
+							<-r.Done
+							break Loop1
+						default:
+							continue
+						}
+					case *NormalTrack:
+						r := r.(*NormalTrack)
+						select {
+						case r.Rider <- t:
+							<-r.Done
+							break Loop1
+						default:
+							continue
+						}
+					}
+				}
+			}
+			snd.Rider <- t
+			t.NextPosition()
+			<-snd.Done
+
+			if rand.Float64() < 0.005 {
+				t.Broke <- t
+			}
+		}
+	}
 }
 
 func (t *Train) ArrivedAtStation(station *Station) {
@@ -62,31 +124,43 @@ func (t *Train) ArrivedAtStation(station *Station) {
 }
 
 func (t *Train) letPassengersOut(station *Station) {
-	for i, ticket := range t.validTickets {
+	left := 0
+	for i := range t.validTickets {
+		j := i - left
+		ticket := t.validTickets[j]
 		if ticket.destination == station {
-			t.validTickets = append(t.validTickets[:i], t.validTickets[i+1:]...)
-			t.ticketUsed(ticket)
+			t.validTickets = append(t.validTickets[:j], t.validTickets[j+1:]...)
+			left++
+			<-t.Seats
+			logger.Printf("%v gets off %v at %v",
+				ticket.owner, t, station)
+			ticket.owner.In = nil
+			ticket.owner.At = station
+			ticket.owner.Done <- true
 		}
 	}
 }
 
 func (t *Train) validateTickets(station *Station) {
-	tickets := station.TicketsFor[t]
-	for i, ticket := range *tickets {
+	validated := 0
+	for i := range station.TicketsFor[t] {
+		j := i - validated
+		ticket := (station.TicketsFor[t])[j]
 		select {
 		case t.Seats <- true:
-			*tickets = append((*tickets)[:i], (*tickets)[i+1:]...)
+			logger.Printf("%v gets on %v at %v",
+				ticket.owner, t, station)
+			station.ticketsMutex.Lock()
+			station.TicketsFor[t] = append((station.TicketsFor[t])[:j], (station.TicketsFor[t])[j+1:]...)
+			station.ticketsMutex.Unlock()
+			validated++
 			t.validTickets = append(t.validTickets, ticket)
+			ticket.owner.In = t
+			ticket.owner.At = nil
 		default:
 			return
 		}
 	}
-}
-
-func (t *Train) ticketUsed(ticket *Ticket) {
-	<-t.Seats
-	ticket.owner.in = nil
-	ticket.owner.Done <- true
 }
 
 // At returns value of tt'st un-exported field at.
@@ -96,7 +170,7 @@ func (t *Train) ID() int { return t.id }
 
 func (t *Train) Speed() int { return t.speed }
 
-// Connection returns pair of pointers to Turntables in tt'st route from current at.
+// Connection returns pair of pointers to TurntableSlice in tt'st route from current at.
 func (t *Train) Connection() (from, to *Turntable) {
 	return t.route[t.index], t.route[(t.index+1)%len(t.route)]
 }

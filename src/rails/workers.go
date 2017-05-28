@@ -1,45 +1,52 @@
 package rails
 
-type Workers []*Worker
+import (
+	"fmt"
+	"math/rand"
+	"time"
+)
+
+type WorkerSlice []*Worker
 
 type Worker struct {
 	id        int
 	Home      *Station
-	workplace *Station
+	Workplace *Station
 	workTime  int
-	in        *Train
+	At        *Station
+	In        *Train
 	Done      chan bool
-	Ready     chan bool // if sits at home waiting for work to do
+	ready     chan bool
 }
 
-func NewWorker(id int, home *Station, workTime int) (worker *Worker) {
+func NewWorker(id int, home *Station) (worker *Worker) {
 	worker = &Worker{
 		id:        id,
 		Home:      home,
-		workplace: nil,
-		workTime:  workTime,
-		in:        nil,
+		Workplace: nil,
+		workTime:  0,
+		At:        home,
+		In:        nil,
 		Done:      make(chan bool),
-		Ready:     make(chan bool)}
-	worker.Ready <- true
+		ready:     make(chan bool)}
 	return
 }
 
 func (w *Worker) ID() int { return w.id }
 
-func (w *Worker) GoToWork(place *Station, workTime int) {
-	w.workplace = place
+func (w *Worker) GoToWork(place *Station, workTime, sph int) {
+	w.Workplace = place
 	w.workTime = workTime
 
 	depT := w.Home.Trains
-	arrT := w.workplace.Trains
+	arrT := w.Workplace.Trains
 
 	for _, dt := range depT {
 		for _, at := range arrT {
 			if dt == at {
-				w.travel(at, w.Home, w.workplace)
-				w.work()
-				w.travel(at, w.workplace, w.Home)
+				w.travel(at, w.Home, w.Workplace)
+				w.work(sph)
+				w.travel(at, w.At, w.Home)
 				return
 			}
 		}
@@ -53,9 +60,9 @@ func (w *Worker) GoToWork(place *Station, workTime int) {
 				for _, sa := range at.Connects {
 					if sd == sa {
 						w.travel(dt, w.Home, sd)
-						w.travel(at, sd, w.workplace)
-						w.work()
-						w.travel(at, w.workplace, sa)
+						w.travel(at, sd, w.Workplace)
+						w.work(sph)
+						w.travel(at, w.At, sa)
 						w.travel(dt, sa, w.Home)
 						return
 					}
@@ -76,14 +83,42 @@ type Ticket struct {
 
 func (w *Worker) travel(train *Train, from *Station, to *Station) {
 	// TODO: travel...
-	*from.TicketsFor[train] = append(*from.TicketsFor[train], &Ticket{
+	from.ticketsMutex.Lock()
+	from.TicketsFor[train] = append(from.TicketsFor[train], &Ticket{
 		owner:       w,
 		departure:   from,
 		destination: to,
 		train:       train})
+	from.ticketsMutex.Unlock()
 	<-w.Done
 }
 
-func (w *Worker) work() {
-	// TODO: work...
+func (w *Worker) work(sph int) {
+	// TODO: wait for all
+	//teammates := make(WorkerSlice, 0)
+	//for _, w := range
+	//
+	//<-w.ready
+
+	logger.Printf("%v is working...", w)
+	duration := float64(w.workTime) / 60.0
+	sleepTime := float64(sph) * duration * 1000.0
+	time.Sleep(time.Duration(sleepTime) * time.Millisecond)
+	w.workTime = 0
+	w.Workplace = nil
+}
+
+func (w *Worker) String() string {
+	return fmt.Sprintf("Worker%d from %s", w.id, w.Home.Name)
+}
+
+func (ws WorkerSlice) Subset(n int) (subset WorkerSlice) {
+	if n > len(ws) {
+		panic("Can't generate random subset larger than set")
+	}
+	rand.Seed(time.Now().UnixNano())
+	for _, i := range rand.Perm(len(ws))[:n] {
+		subset = append(subset, ws[i])
+	}
+	return subset
 }

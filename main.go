@@ -9,11 +9,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"math"
 	"math/rand"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 	"unicode"
@@ -21,61 +18,18 @@ import (
 	"./src/rails"
 )
 
-func clockTime() string {
-	d := time.Since(start)
-
-	sH, f := math.Modf(d.Seconds() / float64(secondsPerHour))
-	sM, f := math.Modf(60.0 * f)
-	sS := 60.0 * f
-
-	h := int(sH) + clock.h
-	h = h % 24
-	m := int(sM) + clock.m
-	if m > 59 {
-		h++
-	}
-	m = m % 60
-	s := int(sS)
-
-	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
-}
-
 func check(e error) {
 	if e != nil {
 		panic(e)
 	}
 }
 
-// readFields scans lines until uncommented non-empty line, then tokenize it and returns
-func readFields(scan *bufio.Scanner, expected int) ([]string, error) {
-	scan.Scan()
-	text := scan.Text()
-	for strings.HasPrefix(text, "#") || text == "" {
-		scan.Scan()
-		text = scan.Text()
-	}
-	fields := strings.Fields(text)
-	if l := len(fields); l != expected {
-		return fields, fmt.Errorf("expected to read %d fields, found %d", expected, l)
-	}
-	return fields, nil
-}
-
-var secondsPerHour int             // how many seconds one hour of simulation lasts
-var clock struct{ h, m int }       // simulation clock start hours and minutes
-var start time.Time                // simulation start time for calculating simulation clock
 var statisticsWriter *bufio.Writer // statistics file writer
 var statisticsChannel = make(chan string, 256)
+var logger *log.Logger
 
-var repairChannel = make(chan rails.BrokenFella)
-var connections rails.ConnectionsGraph
-var turntables rails.Turntables
-var normalTracks rails.NormalTracks
-var stationTracks rails.StationTracks
-var trains rails.Trains
-var repairTeams rails.RepairTeams
-var stations rails.Stations
-var workers rails.Workers
+var railway *rails.RailwayData = &rails.RailwayData{RepairChannel: make(chan rails.BrokenFella)}
+var data *rails.SimulationData = &rails.SimulationData{StatisticsChannel: &statisticsChannel}
 
 var verbose = flag.Bool("verbose", false, "print state changes in real time")
 var generateDotFile = flag.Bool("dot", false, "generate Graphviz .dot file of railroad")
@@ -83,6 +37,7 @@ var inFilename = flag.String("in", "input", "input file containing railroad desc
 var outFilename = flag.String("out", "output", "output file for statistics saving, will be overwritten")
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
 	flag.Parse()
 
 	out, err := os.Create(*outFilename)
@@ -104,301 +59,11 @@ func main() {
 	defer in.Close()
 	scan := bufio.NewScanner(in)
 
-	fields, err := readFields(scan, 1)
-	check(err)
-	sph, err := strconv.Atoi(fields[0])
-	check(err)
-	secondsPerHour = sph
+	data.Parse(scan)
+	railway.Parse(scan)
 
-	fields, err = readFields(scan, 2)
-	check(err)
-	clock.h, err = strconv.Atoi(fields[0])
-	check(err)
-	clock.m, err = strconv.Atoi(fields[1])
-	check(err)
-
-	fields, err = readFields(scan, 5)
-	check(err)
-	rts, err := strconv.Atoi(fields[0])
-	check(err)
-	ts, err := strconv.Atoi(fields[1])
-	check(err)
-	tts, err := strconv.Atoi(fields[2])
-	check(err)
-	nts, err := strconv.Atoi(fields[3])
-	check(err)
-	sts, err := strconv.Atoi(fields[4])
-	check(err)
-
-	fmt.Printf("%d Trains\n"+
-		"%d turntables\n"+
-		"%d normal tracks\n"+
-		"%d station tracks\n"+
-		"Hour simulation will take %d seconds\n"+
-		"Simulation starts at %02d:%02d\n",
-		ts, nts, sts, tts, sph, clock.h, clock.m)
-
-	connections = rails.NewConnectionsGraph(tts)
-
-	// TURNTABLES
-	turntables = make(rails.Turntables, tts)
-	for i := range turntables {
-		fields, err = readFields(scan, 3)
-		check(err)
-
-		id, err := strconv.Atoi(fields[0])
-		check(err)
-		rTime, err := strconv.Atoi(fields[1])
-		check(err)
-		repTime, err := strconv.Atoi(fields[2])
-		check(err)
-
-		turntables[i] = rails.NewTurntable(id, rTime, repTime)
-
-		go func(self *rails.Turntable) {
-			for {
-				select {
-				case <-self.Broke:
-					select {
-					case repairChannel <- self:
-						log.Printf("%s %v broke", clockTime(), self)
-						<-self.Repaired
-						log.Printf("%s %v repaired", clockTime(), self)
-					default:
-						continue
-					}
-				case <-self.Reserved:
-					log.Printf("%s %v is reserved", clockTime(), self)
-					select {
-					case <-self.Cancelled:
-						log.Printf("%s %v reservation cancelled", clockTime(), self)
-					case rt := <-self.TeamRider:
-						rt.Done <- true
-
-						rt.SetAt(self)
-						log.Printf("%s %v rotates at reserved %v",
-							clockTime(), rt, self)
-						self.Sleep(rt.Speed(), secondsPerHour)
-						self.Done <- true
-						<-rt.Done
-					}
-				case t := <-self.Rider:
-					t.Done <- true
-
-					switch t.At().(type) {
-					// if train left station save it to timetable
-					case *rails.StationTrack:
-						statisticsChannel <- fmt.Sprintf("%v %s ->\t%v\n",
-							t, clockTime(), t.At())
-					}
-					// calculate real seconds to simulate action time
-					t.SetAt(self)
-					log.Printf("%s %v rotates at %v",
-						clockTime(), t, self)
-					self.Sleep(t.Speed(), secondsPerHour)
-
-					self.Done <- true
-					<-t.Done
-					if rand.Float64() < 0.08 {
-						self.Broke <- self
-					}
-				case rt := <-self.TeamRider:
-					rt.Done <- true
-
-					rt.SetAt(self)
-					log.Printf("%s %v rotates at %v",
-						clockTime(), rt, self)
-					self.Sleep(rt.Speed(), secondsPerHour)
-
-					self.Done <- true
-					<-rt.Done
-				}
-			}
-		}(turntables[i])
-	}
-
-	// NORMAL TRACKS
-	normalTracks = make(rails.NormalTracks, nts)
-	for i := range normalTracks {
-		fields, err = readFields(scan, 6)
-		check(err)
-
-		id, err := strconv.Atoi(fields[0])
-		check(err)
-		length, err := strconv.Atoi(fields[1])
-		check(err)
-		speed, err := strconv.Atoi(fields[2])
-		check(err)
-		repTime, err := strconv.Atoi(fields[3])
-		check(err)
-		fst, err := strconv.Atoi(fields[4])
-		check(err)
-		snd, err := strconv.Atoi(fields[5])
-		check(err)
-
-		normalTracks[i] = rails.NewNormalTrack(id, length, speed, repTime, turntables[fst], turntables[snd])
-
-		connections[fst][snd] = append(connections[fst][snd], normalTracks[i])
-		connections[snd][fst] = append(connections[snd][fst], normalTracks[i])
-
-		go func(self *rails.NormalTrack) {
-			for {
-				select {
-				case <-self.Broke:
-					select {
-					case repairChannel <- self:
-						log.Printf("%s %v broke", clockTime(), self)
-						<-self.Repaired
-						log.Printf("%s %v repaired", clockTime(), self)
-					default:
-						continue
-					}
-				case <-self.Reserved:
-					log.Printf("%s %v is reserved", clockTime(), self)
-					select {
-					case <-self.Cancelled:
-						log.Printf("%s %v reservation cancelled", clockTime(), self)
-					case rt := <-self.TeamRider:
-						rt.Done <- true
-
-						rt.SetAt(self)
-						log.Printf("%s %v travels along reserved %v",
-							clockTime(), rt, self)
-						self.Sleep(rt.Speed(), secondsPerHour)
-
-						self.Done <- true
-						<-rt.Done
-					}
-				case t := <-self.Rider:
-					t.Done <- true
-
-					t.SetAt(self)
-					log.Printf("%s %v travels along %v",
-						clockTime(), t, self)
-					self.Sleep(t.Speed(), secondsPerHour)
-
-					self.Done <- true
-					<-t.Done
-					if rand.Float64() < 0.05 {
-						self.Broke <- self
-					}
-				case rt := <-self.TeamRider:
-					rt.Done <- true
-
-					rt.SetAt(self)
-					log.Printf("%s %v travels along %v",
-						clockTime(), rt, self)
-					self.Sleep(rt.Speed(), secondsPerHour)
-
-					self.Done <- true
-					<-rt.Done
-				}
-			}
-		}(normalTracks[i])
-	}
-
-	// STATION TRACKS
-	stationTracks = make(rails.StationTracks, sts)
-	for i := range stationTracks {
-		fields, err = readFields(scan, 6)
-		check(err)
-
-		id, err := strconv.Atoi(fields[0])
-		check(err)
-		name := fields[1]
-		sTime, err := strconv.Atoi(fields[2])
-		check(err)
-		repTime, err := strconv.Atoi(fields[3])
-		check(err)
-		fst, err := strconv.Atoi(fields[4])
-		check(err)
-		snd, err := strconv.Atoi(fields[5])
-		check(err)
-
-		stationTracks[i] = rails.NewStationTrack(id, name, sTime, repTime, turntables[fst], turntables[snd])
-
-		connections[fst][snd] = append(connections[fst][snd], stationTracks[i])
-		if fst != snd {
-			connections[snd][fst] = append(connections[snd][fst], stationTracks[i])
-		}
-
-		go func(self *rails.StationTrack) {
-			for {
-				select {
-				case <-self.Broke:
-					select {
-					case repairChannel <- self:
-						log.Printf("%s %v broke", clockTime(), self)
-						<-self.Repaired
-						log.Printf("%s %v repaired", clockTime(), self)
-					default:
-						continue
-					}
-				case <-self.Reserved:
-					log.Printf("%s %v is reserved", clockTime(), self)
-					select {
-					case <-self.Cancelled:
-						log.Printf("%s %v reservation cancelled", clockTime(), self)
-					case rt := <-self.TeamRider:
-						rt.Done <- true
-
-						rt.SetAt(self)
-						log.Printf("%s %v waits on reserved %v",
-							clockTime(), rt, self)
-						self.Sleep(rt.Speed(), secondsPerHour)
-
-						self.Done <- true
-						<-rt.Done
-					}
-				case t := <-self.Rider:
-					t.Done <- true
-
-					statisticsChannel <- fmt.Sprintf("%v %s >-\t%v\n",
-						t, clockTime(), self)
-					// calculate real seconds to simulate action time
-					t.SetAt(self)
-					log.Printf("%s %v waits on %v",
-						clockTime(), t, self)
-
-					t.ArrivedAtStation(self.Station())
-
-					self.Sleep(t.Speed(), secondsPerHour)
-
-					self.Done <- true
-					<-t.Done
-					if rand.Float64() < 0.01 {
-						self.Broke <- self
-					}
-				case rt := <-self.TeamRider:
-					rt.Done <- true
-
-					rt.SetAt(self)
-					log.Printf("%s %v waits on %v",
-						clockTime(), rt, self)
-					self.Sleep(rt.Speed(), secondsPerHour)
-
-					self.Done <- true
-					<-rt.Done
-				}
-			}
-		}(stationTracks[i])
-	}
-
-	// STATIONS
-	stations = make(rails.Stations, 0)
-CreateStations:
-	for _, st := range stationTracks {
-		for _, station := range stations {
-			if st.BelongsTo(station) {
-				station.StationTracks = append(station.StationTracks, st)
-				st.SetStation(station)
-				continue CreateStations
-			}
-		}
-		station := rails.NewStation(len(stations), st)
-		stations = append(stations, station)
-		st.SetStation(station)
-	}
+	fmt.Printf("%v\n", data)
+	fmt.Printf("%v\n", railway)
 
 	// DOT FILE
 	if *generateDotFile {
@@ -410,9 +75,9 @@ CreateStations:
 		dotWriter.WriteString(
 			fmt.Sprintf("graph %s {graph [pad=\"0.25\", nodesep=\"0.5\", ranksep=\"1.0\"];\n", *inFilename))
 
-		for i := range connections {
+		for i := range railway.Connections {
 			for j := 0; j <= i; j++ {
-				for _, t := range connections[i][j] {
+				for _, t := range railway.Connections[i][j] {
 					dotWriter.WriteString(
 						fmt.Sprintf("\t%d -- %d", i, j))
 					switch t.(type) {
@@ -437,214 +102,12 @@ CreateStations:
 		os.Exit(0)
 	}
 
-	// REPAIR TEAMS
-	repairTeams = make(rails.RepairTeams, rts)
-	for i := range repairTeams {
-		fields, err = readFields(scan, 3)
-		check(err)
-
-		id, err := strconv.Atoi(fields[0])
-		check(err)
-		speed, err := strconv.Atoi(fields[1])
-		check(err)
-		stationId, err := strconv.Atoi(fields[2])
-		check(err)
-
-		repairTeams[i] = rails.NewRepairTeam(id, speed, stationTracks[stationId])
-
-		go func(self *rails.RepairTeam) {
-		Loop:
-
-			self.Station().TeamRider <- self
-			<-self.Done
-			<-self.Station().Done
-
-			for {
-				client := <-repairChannel
-				log.Printf("%s %v prepares to repair %v",
-					clockTime(), self, client)
-				destinations := client.Neighbors(connections)
-
-				for _, d := range destinations {
-					if self.Station() == d {
-						log.Printf("%s %v repairs %v from depot", clockTime(), self, client)
-						repairTime := float64(sph) * client.RepairTime() * 1000.0
-						time.Sleep(time.Duration(repairTime) * time.Millisecond)
-						client.Repair()
-						goto Loop
-					}
-				}
-
-				reserved := make([]rails.Track, 0)
-
-				// Reservations
-				for _, nt := range normalTracks {
-					if nt == client {
-						continue
-					} else if nt.Reserve() {
-						reserved = append(reserved, nt)
-					}
-				}
-				for _, st := range stationTracks {
-					if st == client {
-						continue
-					} else if st.Reserve() {
-						reserved = append(reserved, st)
-					}
-				}
-				for _, tt := range turntables {
-					if tt == client {
-						continue
-					} else if tt.Reserve() {
-						reserved = append(reserved, tt)
-					}
-				}
-
-				resp := make(chan rails.Path)
-				go rails.SearchForPath(rails.Path{self.Station()}, self.Station(), destinations, resp, connections)
-				path := <-resp
-
-				logString := fmt.Sprintf("%s %v found path to faulty %v:\n",
-					clockTime(), self, client)
-				for i, t := range path {
-					logString += fmt.Sprintf("%d. %v\n", i, t)
-				}
-
-				log.Print(logString)
-
-			ForAllReserved:
-				for _, r := range reserved {
-					for _, t := range path {
-						if r == t {
-							continue ForAllReserved
-						}
-					}
-					r.Cancel()
-				}
-
-				for _, track := range path[1:] {
-					switch track.(type) {
-					case *rails.StationTrack:
-						track := track.(*rails.StationTrack)
-						track.TeamRider <- self
-						<-track.Done
-					case *rails.NormalTrack:
-						track := track.(*rails.NormalTrack)
-						track.TeamRider <- self
-						<-track.Done
-					case *rails.Turntable:
-						track := track.(*rails.Turntable)
-						track.TeamRider <- self
-						<-track.Done
-					}
-				}
-
-				log.Printf("%s %v repairs %v from %v", clockTime(), self, client, path[len(path)-1])
-				repairTime := float64(sph) * client.RepairTime() * 1000.0
-				time.Sleep(time.Duration(repairTime) * time.Millisecond)
-				client.Repair()
-
-				for i := range path[1 : len(path)-1] {
-					track := path[len(path)-1-i]
-					switch track.(type) {
-					case *rails.StationTrack:
-						track := track.(*rails.StationTrack)
-					Loop1:
-						for {
-							for _, sibling := range track.Siblings(connections) {
-								st := sibling.(*rails.StationTrack)
-								select {
-								case st.TeamRider <- self:
-									<-st.Done
-									break Loop1
-								default:
-									continue
-								}
-							}
-						}
-					case *rails.NormalTrack:
-						track := track.(*rails.NormalTrack)
-					Loop2:
-						for {
-							for _, sibling := range track.Siblings(connections) {
-								nt := sibling.(*rails.NormalTrack)
-								select {
-								case nt.TeamRider <- self:
-									<-nt.Done
-									break Loop2
-								default:
-									continue
-								}
-							}
-						}
-					case *rails.Turntable:
-						track := track.(*rails.Turntable)
-						track.TeamRider <- self
-						<-track.Done
-					}
-				}
-
-				self.Station().TeamRider <- self
-				<-self.Station().Done
-				log.Printf("%s %v returned to depot", clockTime(), self)
-			}
-		}(repairTeams[i])
-	}
-
-	// TRAINS
-	trains = make(rails.Trains, ts)
-	for i := range trains {
-		fields, err = readFields(scan, 6)
-		check(err)
-
-		id, err := strconv.Atoi(fields[0])
-		check(err)
-		speed, err := strconv.Atoi(fields[1])
-		check(err)
-		capacity, err := strconv.Atoi(fields[2])
-		check(err)
-		repTime, err := strconv.Atoi(fields[3])
-		check(err)
-		name := fields[4]
-		length, err := strconv.Atoi(fields[5])
-		check(err)
-
-		fields, err = readFields(scan, length)
-		check(err)
-
-		route := rails.Route{}
-		for j := 0; j < length; j++ {
-			index, err := strconv.Atoi(fields[j])
-			check(err)
-
-			route = append(route, turntables[index])
-		}
-
-		train := rails.NewTrain(id, speed, capacity, repTime, name, route)
-
-		prev := route[len(route)-1]
-		for i := 0; i < len(route)-1; i++ {
-			next := route[i]
-			for _, s := range stations {
-				if s.Connects(prev, next) {
-					train.Connects = append(train.Connects, s)
-					s.Trains = append(s.Trains, train)
-					tickets := make(rails.Tickets, 0)
-					s.TicketsFor[train] = &tickets
-				}
-			}
-			prev = next
-		}
-
-		trains[i] = train
-	}
-
 	waitGroup := new(sync.WaitGroup)
-	waitGroup.Add(len(trains))
+	waitGroup.Add(len(railway.Trains))
 
 	// VERBOSE MODE
 	if !*verbose {
-		log.SetOutput(ioutil.Discard)
+		logger = log.New(ioutil.Discard, "", 0)
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
@@ -659,6 +122,7 @@ CreateStations:
 				"\t'u' - list turntables,\n" +
 				"\t'n' - list normal tracks,\n" +
 				"\t's' - list stations with station tracks,\n" +
+				"\t'w' - list workers,\n" +
 				"\t'h' - print this menu again,\n" +
 				"\t'v' - enter verbose mode (YOU WILL NOT BE ABLE TO TURN IT OFF),\n" +
 				"\t'q' - to quit simulation.\n"
@@ -671,42 +135,58 @@ CreateStations:
 				r := []rune(input)[0]
 				switch unicode.ToUpper(r) {
 				case 'C': // clock
-					fmt.Println(clockTime())
+					fmt.Println(rails.ClockTime(data))
 				case 'P': // positions
-					for _, t := range trains {
+					for _, t := range railway.Trains {
 						fmt.Printf("%v: %v\n", t, t.At())
 					}
-					for _, rt := range repairTeams {
+					for _, rt := range railway.RepairTeams {
 						fmt.Printf("%v: %v\n", rt, rt.At())
 					}
 				case 'T': // trains
-					for _, t := range trains {
-						fmt.Printf("%v, position: %v\n", t, t.At())
+					for _, t := range railway.Trains {
+						fmt.Printf("%v, position: %v, connects:\n", t, t.At())
+						for _, s := range t.Connects {
+							fmt.Printf("\t%v\n", s)
+						}
 					}
 				case 'R': // repair teams
-					for _, rt := range repairTeams {
+					for _, rt := range railway.RepairTeams {
 						fmt.Printf("%v, position: %v\n", rt, rt.At())
 					}
 				case 'U': // turntables
-					for _, tt := range turntables {
+					for _, tt := range railway.Turntables {
 						fmt.Printf("%v\n", tt)
 					}
 				case 'N': // normal tracks
-					for _, nt := range normalTracks {
+					for _, nt := range railway.NormalTracks {
 						fmt.Printf("%v\n", nt)
 					}
 				case 'S': // stations
-					for _, s := range stations {
+					for _, s := range railway.Stations {
 						fmt.Printf("%v:\n", s)
 						for _, st := range s.StationTracks {
 							fmt.Printf("\t%v\n", st)
 						}
 					}
+				case 'W': // workers
+					for _, w := range railway.Workers {
+						var position string
+						if w.In != nil {
+							position = fmt.Sprintf("travels by %v", w.In)
+						} else if w.At != nil {
+							if w.At == w.Home && w.Workplace == nil {
+								position = "is resting at home"
+							} else {
+								position = fmt.Sprintf("waits at %v", w.At)
+							}
+						}
+						fmt.Printf("%v %s\n", w, position)
+					}
 				case 'H': // help
 					fmt.Print(instructions)
 				case 'V': // verbose
-					log.SetOutput(os.Stdout)
-					log.SetFlags(0)
+					logger = log.New(os.Stdout, "", 0)
 					return
 				case 'Q': // quit
 					os.Exit(0)
@@ -716,72 +196,26 @@ CreateStations:
 			}
 		}()
 	} else {
-		log.SetFlags(0)
+		logger = log.New(os.Stdout, "", 0)
 	}
 
-	// START SIMULATION
-	start = time.Now()
-	for i := range trains {
-		go func(t *rails.Train) {
-			defer waitGroup.Done()
+	rails.Simulate(railway, data, logger, waitGroup)
 
-			log.Printf("%s %v starts work", clockTime(), t)
-
-			track := t.At().(*rails.Turntable)
-			track.Rider <- t
-			<-t.Done
-			<-track.Done
-
-			for {
-				select {
-				case <-t.Broke:
-					select {
-					case repairChannel <- t:
-						log.Printf("%s %v broke", clockTime(), t)
-						<-t.Repaired
-						log.Printf("%s %v repaired", clockTime(), t)
-					default:
-						continue
-					}
-				default:
-					// get nearest Turntables
-					fst, snd := t.Connection()
-				Loop1: // search for available Track connecting `fst` and `snd`
-					for {
-						for _, r := range connections[fst.ID()][snd.ID()] {
-							switch r.(type) {
-							case *rails.StationTrack:
-								r := r.(*rails.StationTrack)
-								select {
-								case r.Rider <- t:
-									<-r.Done
-									break Loop1
-								default:
-									continue
-								}
-							case *rails.NormalTrack:
-								r := r.(*rails.NormalTrack)
-								select {
-								case r.Rider <- t:
-									<-r.Done
-									break Loop1
-								default:
-									continue
-								}
-							}
-						}
-					}
-					snd.Rider <- t
-					t.NextPosition()
-					<-snd.Done
-
-					if rand.Float64() < 0.005 {
-						t.Broke <- t
-					}
-				}
-			}
-		}(trains[i])
-	}
+	go func() {
+		subset := railway.Workers.Subset(3)
+		workplace := railway.Stations[10]
+		workTime := 30
+		time.Sleep(10 * time.Second)
+		for _, w := range subset {
+			go func(worker *rails.Worker) {
+				logger.Printf("%s %v goes to work at %v for %dm",
+					rails.ClockTime(data), worker, workplace, workTime)
+				worker.GoToWork(workplace, workTime, data.SecondsPerHour)
+				logger.Printf("%s %v returned from work",
+					rails.ClockTime(data), worker)
+			}(w)
+		}
+	}()
 
 	waitGroup.Wait()
 }

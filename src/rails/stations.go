@@ -3,6 +3,7 @@ package rails
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 type Station struct {
@@ -10,10 +11,12 @@ type Station struct {
 	Name          string
 	first         *Turntable
 	second        *Turntable
-	Trains        Trains
-	StationTracks StationTracks
-	TicketsFor    map[*Train]*Tickets
-	Destinations  Stations
+	Residents     WorkerSlice
+	Trains        TrainSlice
+	StationTracks StationTrackSlice
+	TicketsFor    map[*Train]Tickets
+	ticketsMutex  sync.Mutex
+	Destinations  StationSlice
 }
 
 func NewStation(id int, initial *StationTrack) (station *Station) {
@@ -22,10 +25,11 @@ func NewStation(id int, initial *StationTrack) (station *Station) {
 		Name:          initial.Name,
 		first:         initial.first,
 		second:        initial.second,
-		Trains:        make(Trains, 0),
-		StationTracks: StationTracks{initial},
-		TicketsFor:    make(map[*Train]*Tickets, 0),
-		Destinations:  make(Stations, 0)}
+		Residents:     make(WorkerSlice, 0),
+		Trains:        make(TrainSlice, 0),
+		StationTracks: StationTrackSlice{initial},
+		TicketsFor:    make(map[*Train]Tickets, 0),
+		Destinations:  make(StationSlice, 0)}
 }
 
 func (s *Station) ID() int { return s.id }
@@ -34,7 +38,7 @@ func (s *Station) Connects(first, second *Turntable) bool {
 	return (s.first == first && s.second == second) || (s.first == second && s.second == first)
 }
 
-type Stations []*Station
+type StationSlice []*Station
 
 func (s *Station) String() string {
 	return fmt.Sprintf("Station%d %s", s.id, strings.ToUpper(s.Name))
