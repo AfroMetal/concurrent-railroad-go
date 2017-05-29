@@ -332,23 +332,34 @@ func Simulate(railway *RailwayData, data *SimulationData, log *log.Logger, wg *s
 			go w.Simulate(railway, data)
 		}
 		// DISPATCHER
+		const (
+			MIN_WAIT_H                    = 3
+			WAIT_SPAN_H                   = 2
+			MIN_WORKERS           float64 = 2
+			WORKERS_SPAN_FRACTION         = 0.25
+			MIN_WORK_M                    = 30
+			WORK_SPAN_M                   = 60
+		)
 		go func() {
+			workers_span := int(WORKERS_SPAN_FRACTION * float64(len(railway.Workers)))
 			for {
-				// wait 3-5 hours between jobs
-				time.Sleep(time.Duration(data.SecondsPerHour*(3+rand.Intn(3))) * time.Second)
-				// choose from 2 to 2+(number of workers/4) workers for the job
+				// wait couple hours between jobs
+				duration := MIN_WAIT_H + rand.Intn(WAIT_SPAN_H+1)
+				breakTime := data.SecondsPerHour * duration * 1000.0
+				time.Sleep(time.Duration(breakTime) * time.Millisecond)
+				// choose number of workers for the job
 				n := int(math.Min(
-					2.0 + math.Ceil(float64(rand.Intn(len(railway.Workers))/4)),
+					MIN_WORKERS+float64(rand.Intn(workers_span)),
 					float64(len(railway.Workers))))
 				subset := railway.Workers.Subset(n)
 				// only if all workers chosen ara available
 				if subset.available() {
 					// avoid working at depots
-					m := rand.Intn(len(railway.Stations)-railway.rts)
+					m := rand.Intn(len(railway.Stations) - railway.rts)
 					workplace := railway.Stations[m]
-					// work for 30-90 minutes
-					workTime := 30 + rand.Intn(61)
-					
+					// work for some random time
+					workTime := MIN_WORK_M + rand.Intn(WORK_SPAN_M+1)
+
 					job := NewJob(workTime, workplace, subset)
 					for _, w := range subset {
 						w.Work <- job

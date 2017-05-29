@@ -14,6 +14,12 @@ import (
 	"time"
 )
 
+const (
+	NORMAL_TRACK_BREAK_PROBABILITY  = 0.02
+	STATION_TRACK_BREAK_PROBABILITY = 0.02
+	TURNTABLE_BREAK_PROBABILITY     = 0.005
+)
+
 type ConnectionsGraph []map[int][]Track
 
 func NewConnectionsGraph(n int) (connections ConnectionsGraph) {
@@ -200,7 +206,7 @@ func (nt *NormalTrack) Simulate(railway *RailwayData, data *SimulationData) {
 
 			nt.Done <- true
 			<-t.Done
-			if rand.Float64() < 0.02 {
+			if rand.Float64() < NORMAL_TRACK_BREAK_PROBABILITY {
 				nt.Broke <- nt
 			}
 		case rt := <-nt.TeamRider:
@@ -247,7 +253,7 @@ func (st *StationTrack) Simulate(railway *RailwayData, data *SimulationData) {
 		case t := <-st.Rider:
 			t.Done <- true
 
-			*data.StatisticsChannel <- fmt.Sprintf("%v %s >-\t%v\n",
+			*data.StatisticsChannel <- fmt.Sprintf("%v\t%s >- %v\n",
 				t, ClockTime(data), st)
 			// calculate real seconds to simulate action time
 			t.SetAt(st)
@@ -261,7 +267,7 @@ func (st *StationTrack) Simulate(railway *RailwayData, data *SimulationData) {
 
 			st.Done <- true
 			<-t.Done
-			if rand.Float64() < 0.01 {
+			if rand.Float64() < STATION_TRACK_BREAK_PROBABILITY {
 				st.Broke <- st
 			}
 		case rt := <-st.TeamRider:
@@ -310,7 +316,7 @@ func (tt *Turntable) Simulate(railway *RailwayData, data *SimulationData) {
 			switch t.At().(type) {
 			// if train left station save it to timetable
 			case *StationTrack:
-				*data.StatisticsChannel <- fmt.Sprintf("%v %s ->\t%v\n",
+				*data.StatisticsChannel <- fmt.Sprintf("%v\t%s -> %v\n",
 					t, ClockTime(data), t.At())
 			}
 			// calculate real seconds to simulate action time
@@ -321,7 +327,7 @@ func (tt *Turntable) Simulate(railway *RailwayData, data *SimulationData) {
 
 			tt.Done <- true
 			<-t.Done
-			if rand.Float64() < 0.01 {
+			if rand.Float64() < TURNTABLE_BREAK_PROBABILITY {
 				tt.Broke <- tt
 			}
 		case rt := <-tt.TeamRider:

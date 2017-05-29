@@ -8,6 +8,10 @@ import (
 	"sync"
 )
 
+const (
+	TRAIN_BREAK_PROBABILITY = 0.02
+)
+
 type TrainSlice []*Train
 type RepairTeamSlice []*RepairTeam
 
@@ -110,7 +114,7 @@ func (t *Train) Simulate(railway *RailwayData, data *SimulationData, wg *sync.Wa
 			t.NextPosition()
 			<-snd.Done
 
-			if rand.Float64() < 0.02 {
+			if rand.Float64() < TRAIN_BREAK_PROBABILITY {
 				t.Broke <- t
 			}
 		}
