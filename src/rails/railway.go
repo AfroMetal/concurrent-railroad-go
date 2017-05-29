@@ -334,13 +334,21 @@ func Simulate(railway *RailwayData, data *SimulationData, log *log.Logger, wg *s
 		// DISPATCHER
 		go func() {
 			for {
+				// wait 3-5 hours between jobs
 				time.Sleep(time.Duration(data.SecondsPerHour*(3+rand.Intn(3))) * time.Second)
-
-				n := len(railway.Workers)/4 + rand.Intn(len(railway.Workers)/4)
+				// choose from 2 to 2+(number of workers/4) workers for the job
+				n := int(math.Min(
+					2.0 + math.Ceil(float64(rand.Intn(len(railway.Workers))/4)),
+					float64(len(railway.Workers))))
 				subset := railway.Workers.Subset(n)
+				// only if all workers chosen ara available
 				if subset.available() {
-					workplace := railway.Stations[rand.Intn(len(railway.Stations)-railway.rts)] // avoid working at depots
-					workTime := 30 + rand.Intn(60)
+					// avoid working at depots
+					m := rand.Intn(len(railway.Stations)-railway.rts)
+					workplace := railway.Stations[m]
+					// work for 30-90 minutes
+					workTime := 30 + rand.Intn(61)
+					
 					job := NewJob(workTime, workplace, subset)
 					for _, w := range subset {
 						w.Work <- job
