@@ -185,7 +185,7 @@ func main() {
 							if w.In != nil {
 								position = fmt.Sprintf("travels by %v", w.In)
 							} else if w.At != nil {
-								if w.At == w.Home && w.Job.Workplace == nil {
+								if w.At == w.Home && w.Job == nil {
 									position = "is resting at home"
 								} else {
 									position = fmt.Sprintf("waits at %v", w.At)

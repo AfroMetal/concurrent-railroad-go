@@ -12,14 +12,15 @@ or
 
 where options are:
 ```
--in filename
-    read configuration data from file specified by `filename` (default `input`)
--out filename
-    save statistics data to file specified by `filename` (default `input`)
--verbose
-    turn verbose mode on (off by default)
--dot
-    generate .dot graph file or railway and exit
+   -d    generate Graphviz .dot file of railroad
+   -i string
+         input file containing railroad description (default "input")
+   -o string
+         output file for statistics saving, will be overwritten (default "output")
+   -r    simulate breakage and repair using RepairTeams
+   -v    print state changes in real time
+   -w    simulate Workers and jobs dispatcher
+
 ```
 
 #### Configuration file: ####
