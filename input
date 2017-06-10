@@ -6,8 +6,8 @@
 12 00
 
 # amount of defined objects:
-# repairTeams trains turntables normalTracks stationTracks
-1 2 8 8 7
+# repairTeams trains turntables normalTracks stationTracks workers
+1 2 8 8 7 5
 
 # turntables:
 # id time repairTime
@@ -58,3 +58,11 @@
 1 200 90 90 ||| 8
 #6 7 5 3
 6 7 5 4 1 0 2 3
+
+# workers
+# id stationId
+0 0
+1 1
+2 3
+3 3
+4 0
