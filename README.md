@@ -30,5 +30,6 @@ Configuration file defines railroad characteristics such as:
 * specification of all tracks: turntables, station and normal tracks,
 * specification of trains together with their route,
 * specification of repair teams,
+* workers and their home stations.
 
 Example configuration file can be found in `input` with further instructions on how to write such file.
